@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -41,13 +40,7 @@ type managementRequestWire struct {
 }
 
 // The host injects its own prefixes at management.register; keep the historical
-// defaults for older hosts that do not send them.
-var (
-	basePathMu     sync.RWMutex
-	managementBase = "/v0/management"
-	resourceBase   = "/v0/resource/plugins/" + providerName
-)
-
+// defaults for older hosts that do not send them (state in state.go).
 func setManagementBasePath(p string) {
 	p = strings.TrimRight(strings.TrimSpace(p), "/")
 	if p == "" {
@@ -150,16 +143,6 @@ type packageUsage struct {
 	ExpiresAt   string `json:"expires_at"`
 	Note        string `json:"note"`
 }
-
-var (
-	usageCacheMu sync.Mutex
-	usageCache   *usageSnapshot
-	// usageCollectMu serializes the /v1/me collection itself so concurrent panel
-	// refreshes produce one pass instead of one per viewer. It is deliberately
-	// separate from usageCacheMu: holding the cache lock across the round-trips
-	// would also block snapshotTime() and every cache hit.
-	usageCollectMu sync.Mutex
-)
 
 // packageLabels mirrors the CLI's PACKAGE_LABELS so the panel shows the same
 // Chinese names users see in `u1s1 usage`.

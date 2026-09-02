@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -24,11 +23,8 @@ const (
 	maxErrorBytes    = 64 * 1024
 )
 
-var (
-	httpClientOnce sync.Once
-	sharedClient   *http.Client
-)
-
+// sharedHTTPClient is built once by sync.Once (state.go) and used only when
+// the host bridge is unavailable (unit tests / older hosts).
 func sharedHTTPClient() *http.Client {
 	httpClientOnce.Do(func() {
 		sharedClient = &http.Client{

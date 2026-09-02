@@ -9,7 +9,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -23,8 +22,6 @@ type modelCacheEntry struct {
 	models    []pluginapi.ModelInfo
 	fetchedAt time.Time
 }
-
-var modelCache sync.Map // authID -> modelCacheEntry
 
 type rpcAuthModelRequest struct {
 	pluginapi.AuthModelRequest

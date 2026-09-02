@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
-	"sync"
 )
 
 // jwk is the subset of the JSON Web Key format used by u1s1.
@@ -195,15 +194,11 @@ func normalizePublicJWK(k jwk) jwk {
 	return out
 }
 
+// hashSHA256 hashes data with SHA-256, the DPoP digest primitive.
 func hashSHA256(data []byte) []byte {
 	sum := sha256.Sum256(data)
 	return sum[:]
 }
-
-// keyCache caches parsed private keys per serialized JWK. Beyond skipping the
-// per-request JWK decode it amortizes the keypair consistency check in
-// parsePrivateJWK, which costs one scalar multiplication.
-var keyCache sync.Map
 
 func cachedPrivateKey(priv jwk) (*ecdsa.PrivateKey, error) {
 	serialized, err := json.Marshal(priv)

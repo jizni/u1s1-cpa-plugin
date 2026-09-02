@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"strings"
-	"sync"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	"gopkg.in/yaml.v3"
@@ -30,11 +29,6 @@ type pluginConfig struct {
 	ClientVersion string `yaml:"client-version"`
 	UserAgent     string `yaml:"user-agent"`
 }
-
-var (
-	cfgMu     sync.RWMutex
-	pluginCfg = defaultPluginConfig()
-)
 
 func defaultPluginConfig() pluginConfig {
 	return pluginConfig{
@@ -92,12 +86,21 @@ func activeConfig() pluginConfig {
 	return pluginCfg
 }
 
+// pluginVersion is the plugin's own release version, reported in the
+// registration metadata. It is injected at build time via
+//
+//	-ldflags "-X main.pluginVersion=$(VERSION)"
+//
+// (see Makefile / .github/workflows/release.yml). "dev" marks builds without
+// an injected version, e.g. plain `go build` or the CI test build.
+var pluginVersion = "dev"
+
 func registrationResponse() registration {
 	return registration{
 		SchemaVersion: 1,
 		Metadata: pluginapi.Metadata{
 			Name:             providerName,
-			Version:          "0.1.0",
+			Version:          pluginVersion,
 			Author:           "u1s1-cpa-plugin",
 			GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI",
 			ConfigFields: []pluginapi.ConfigField{

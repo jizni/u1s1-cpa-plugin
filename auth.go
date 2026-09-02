@@ -1,6 +1,7 @@
 // auth.go implements the auth_provider capability: browser device login,
 // polling, credential file parsing, and refresh. Credentials are persisted by
-// the host into auth-dir as u1s1-<email>.json (see storedAuth in gateway.go).
+// the host into auth-dir as u1s1-<email>.json (see storedAuth in
+// credentials.go). Login sessions live in state.go.
 package main
 
 import (
@@ -9,7 +10,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -22,8 +22,6 @@ type loginSession struct {
 	PollSecret string
 	ExpiresAt  time.Time
 }
-
-var loginSessions sync.Map // state -> *loginSession
 
 // rpcAuthLoginStartRequest / poll mirror internal/pluginhost/rpc_schema.go: the
 // host adds host_callback_id so nested host.http.* calls are attributed.

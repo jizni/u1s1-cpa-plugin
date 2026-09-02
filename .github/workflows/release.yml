@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # ubuntu-22.04 (glibc 2.35) rather than ubuntu-latest (24.04 / glibc 2.39):
+    # the CPA container is Debian 12 / glibc 2.36, and the plugin must not
+    # require newer glibc symbols than the container provides.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build (c-shared) with release version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          CGO_ENABLED=1 go build -buildmode=c-shared -trimpath \
+            -ldflags "-s -w -X main.pluginVersion=$VERSION" \
+            -o dist/u1s1.so .
+
+      - name: Verify glibc compatibility (must be ≤ 2.36)
+        run: |
+          max=$(objdump -T dist/u1s1.so | grep 'GLIBC_' | sed -E 's/.*GLIBC_([0-9.]+).*/\1/' | sort -Vu | tail -1)
+          echo "max glibc symbol: GLIBC_$max"
+          case "$max" in
+            2.34|2.35|2.36) ;;
+            *) echo "::error::plugin requires GLIBC_$max, container is 2.36"; exit 1 ;;
+          esac
+
+      - name: Run unit tests
+        run: go test ./...
+
+      - name: Checksums
+        run: |
+          sha256sum dist/u1s1.so > dist/u1s1.so.sha256
+          cat dist/u1s1.so.sha256
+
+      - name: Create release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/u1s1.so
+            dist/u1s1.so.sha256
+          generate_release_notes: true

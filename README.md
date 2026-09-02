@@ -50,17 +50,38 @@ u1s1 不接受普通 Bearer token。每个请求需要**四层**凭证同时成�
 ## 构建
 
 ```bash
-CGO_ENABLED=1 go build -buildmode=c-shared -trimpath -ldflags "-s -w" -o u1s1.so .
+make build          # 产物在 dist/u1s1.so
 ```
+
+等价于（不带版本注入时插件版本号为 `dev`）：
+
+```bash
+CGO_ENABLED=1 go build -buildmode=c-shared -trimpath -ldflags "-s -w" -o dist/u1s1.so .
+```
+
+`make build` 会顺带校验产物对 glibc 的需求（`make glibc-check`）。
+
+## 版本与发布
+
+插件版本号在构建时注入（`-ldflags "-X main.pluginVersion=$VERSION"`），`make build`
+默认取最近的 git tag（`git describe --tags --always --dirty`）。发版流程：
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+GitHub Actions 的 [Release](.github/workflows/release.yml) 流水线会构建 `u1s1.so`、校验
+glibc 兼容性（≤ 2.36）、跑单测，然后把 `u1s1.so` 和 `u1s1.so.sha256` 挂到 Release 资产上。
 
 注意：构建机的 glibc 不能比 CPA 容器的新（本构建目标为 glibc ≤ 2.34；官方镜像为
 Debian 12 / glibc 2.36）。换构建机时用
-`objdump -T u1s1.so | grep GLIBC_ | sort -uV | tail -1` 确认。
+`objdump -T dist/u1s1.so | grep GLIBC_ | sort -uV | tail -1` 确认。
 
 ## 安装
 
 ```bash
-cp u1s1.so <cpa>/plugins/linux/amd64/u1s1.so
+cp dist/u1s1.so <cpa>/plugins/linux/amd64/u1s1.so
+docker restart cli-proxy-api   # 插件替换后必须重启容器才能生效，见 DEVELOPMENT.md §3
 ```
 
 ```yaml

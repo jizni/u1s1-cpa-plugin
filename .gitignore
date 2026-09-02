@@ -1,3 +1,6 @@
+# Build output (see Makefile)
+dist/
+
 # Build artifacts (c-shared output)
 u1s1.so
 u1s1.h

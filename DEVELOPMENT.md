@@ -70,19 +70,57 @@ Go 的 `ecdsa.SignASN1` 输出 DER，会被网关直接拒绝。见 `dpop.go:sig
 
 ### 文件职责
 
+入口层（cgo 边界 + 分发）：
+
 | 文件 | 行数 | 职责 |
 |---|---|---|
-| `main.go` | 310 | cgo C ABI 骨架、方法分发、envelope、panic 屏障、`hostCall` |
-| `config.go` | 153 | 插件配置（base-url/client/client-version/user-agent）、注册声明 |
-| `dpop.go` | 222 | JWK 解析与配对校验、P-256 密钥生成、P1363 签名、DPoP 头构造、私钥缓存 |
-| `gateway.go` | 803 | 凭证结构（含 Extra 保留）、指纹头、attestation 缓存、thinking profile 缓存、公告缓存、错误尾巴、`/models` `/me` `/auth/device/*` |
-| `auth.go` | 391 | 登录会话、poll 状态机、`auth.parse`、refresh、AuthData 与 metadata 构造 |
-| `models.go` | 207 | 模型表拉取与 ModelInfo 映射（含价格/免费包说明）、attestation 回写 |
+| `abi.go` | 174 | cgo C ABI 骨架：C preamble、四个导出入口、触碰 C 符号的 `writeResponse` / `hostCall` |
+| `dispatch.go` | 105 | 方法分发 `handleMethod`、`dispatchMethod`、panic 屏障 |
+| `bridge.go` | 61 | 插件↔宿主信封协议（`{ok,result,error}`）、`hostBridgeUnwrap` |
+
+配置与共享状态：
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
+| `config.go` | 147 | 插件配置（base-url/client/client-version/user-agent）、注册声明 |
+| `state.go` | 76 | 全部包级可变状态集中处（每块标注读写者，为拆包留口子） |
+
+凭证与安全原语：
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
+| `credentials.go` | 149 | 凭证结构 `storedAuth`（含 Extra 保留往返）、解析校验 |
+| `dpop.go` | 217 | JWK 解析与配对校验、P-256 密钥生成、P1363 签名、DPoP 头构造 |
+| `headers.go` | 46 | 客户端指纹头、签名头（指纹 + DPoP + attestation） |
+| `attestation.go` | 153 | client_attestation 令牌缓存（提前刷新、失败退避、并发合并） |
+
+网关端点（wire 层，按端点一文件）：
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
+| `gateway_models.go` | 114 | `/v1/models` 端点与响应 wire 类型 |
+| `profiles.go` | 81 | 每模型 thinking 契约缓存（由 `/models` 喂养，executor 读取） |
+| `announcement.go` | 83 | 网关公告缓存（TTL 刷新、URL 校验） |
+| `gateway_me.go` | 64 | `/v1/me` 端点与额度 wire 类型 |
+| `gateway_device.go` | 98 | `/auth/device/start` / `poll` 端点 |
+| `gateway_errors.go` | 57 | 上游错误解析与错误尾巴（HTTP 状态 · code · 请求编号） |
+
+能力实现：
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
+| `auth.go` | 389 | 登录会话、poll 状态机、`auth.parse`、refresh、AuthData 与 metadata 构造 |
+| `models.go` | 204 | 模型表映射为 ModelInfo（含价格/免费包说明）、attestation 回写 |
 | `thinking.go` | 164 | 模型后缀拆解、等级映射、按 request_format 写上游推理字段 |
 | `executor.go` | 442 | 请求体归一化、非流式/流式执行、SSE 扫描与 framing、token 估算 |
-| `upstream.go` | 435 | 宿主 HTTP 桥接（buffered + streaming）、stream emit/close、日志脱敏 |
-| `management.go` | 408 | 管理路由、额度快照缓存（双锁）、用量包标签 |
+| `upstream.go` | 431 | 宿主 HTTP 桥接（buffered + streaming）、stream emit/close、日志脱敏 |
+| `management.go` | 391 | 管理路由、额度快照缓存（双锁）、用量包标签 |
 | `host_auth.go` | 87 | `host.auth.list` / `host.auth.get` 封装 |
+
+面板与工具：
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
 | `panel.go` | 25 | 面板 HTML 嵌入与 base path 注入 |
 | `panel.html` | 368 | 额度面板（内嵌，不加载任何第三方脚本） |
 | `util.go` | 25 | UUID / 随机 hex |
@@ -105,6 +143,33 @@ Go 的 `ecdsa.SignASN1` 输出 DER，会被网关直接拒绝。见 `dpop.go:sig
 
 安装步骤（`cp`、`chmod`、`config.yaml`）与插件配置项表、同名环境变量见 README「安装」「配置」，
 本文件不再重复。
+
+### 版本管理
+
+插件的注册版本号（`registration.Metadata.Version`，管理控制台可见）来自
+`main.pluginVersion`，构建时经 `-ldflags "-X main.pluginVersion=$(VERSION)"` 注入
+（定义见 `config.go`）。未注入时（`go build .` 或 CI 测试构建）默认 `dev`。
+
+- `make build` 默认取 `git describe --tags --always --dirty`，release tag 检出时无需额外参数。
+- 发布流水线（`.github/workflows/release.yml`）由 `v*` tag 触发，去掉 `v` 前缀注入版本号，
+  并在发布前强制校验 glibc 符号需求 ≤ 2.36（容器是 Debian 12 / glibc 2.36）。
+- 发布产物：`u1s1.so` + `u1s1.so.sha256`，挂在 GitHub Release 资产上；用 `vX.Y.Z` tag 发版。
+
+### 插件替换需重启容器
+
+CPA 的插件宿主（`pluginhost`）只在**插件文件路径变化**时才重建插件：
+`ApplyConfig` 用 `cleanPluginPath(loaded.path) != cleanPluginPath(file.Path)` 判断，
+覆盖同一个 `u1s1.so` 文件 + `touch config.yaml` 不会触发重载，宿主仍持有旧库的 inode。
+
+因此**替换插件（哪怕只是改配置）后必须重启容器**才能让新版本生效：
+
+```bash
+cp dist/u1s1.so <cpa>/plugins/linux/amd64/u1s1.so && docker restart cli-proxy-api
+```
+
+重启后核对日志确认新版本已加载：模型重新注册（`Registered new model u1s1/...`）、
+宿主调用 `auth.refresh`（`refreshed u1s1, ...`）。管理面板的 `/v0/resource/plugins/u1s1/panel`
+返回 200 说明管理路由已注册。
 
 ---
 

@@ -7,6 +7,12 @@
 //   - executor: OpenAI chat-completions passthrough with per-request DPoP (ES256)
 //     signing, the client_attestation token from /v1/models, and the u1s1 client
 //     fingerprint headers (x-u1s1-*, x-stainless-*, pi user-agent).
+//
+// abi.go is the cgo boundary and nothing else: the C preamble, the four
+// exported plugin entry points, and the two helpers that touch C symbols
+// (writeResponse, hostCall). Everything past this file is pure Go: method
+// dispatch lives in dispatch.go, the host bridge envelope protocol in
+// bridge.go.
 package main
 
 /*
@@ -65,12 +71,10 @@ static void free_host_buffer(void* ptr, size_t len) {
 import "C"
 
 import (
-	"encoding/json"
 	"fmt"
 	"unsafe"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
 const abiVersion = pluginabi.ABIVersion
@@ -112,35 +116,6 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 	return C.int(rc)
 }
 
-// dispatchMethod wraps handleMethod with the error envelope contract. Handler
-// errors can embed upstream messages, so they pass through redactSecrets like
-// every other path that may reach logs or clients.
-func dispatchMethod(method string, request []byte) ([]byte, int) {
-	return guardDispatchPanic(method, func() ([]byte, int) {
-		result, errHandle := handleMethod(method, request)
-		if errHandle != nil {
-			return errorEnvelope("plugin_error", redactSecrets(errHandle.Error())), 1
-		}
-		return result, 0
-	})
-}
-
-// guardDispatchPanic turns a panic into a plugin_panic envelope.
-//
-// This is load-bearing, not defensive boilerplate: dispatchMethod runs directly
-// under a cgo entry point, so a panic that unwinds past it crosses the C ABI
-// boundary and takes the whole CPA process down instead of becoming an error the
-// host can fuse the plugin on.
-func guardDispatchPanic(method string, fn func() ([]byte, int)) (out []byte, rc int) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			out = errorEnvelope("plugin_panic", redactSecrets(fmt.Sprintf("u1s1 plugin panic in %s: %v", method, recovered)))
-			rc = 1
-		}
-	}()
-	return fn()
-}
-
 //export cliproxyPluginFree
 func cliproxyPluginFree(ptr unsafe.Pointer, len C.size_t) {
 	if ptr != nil {
@@ -159,109 +134,9 @@ func cliproxyPluginShutdown() {
 	// the OS reclaims everything else.
 }
 
-// registrationRequest mirrors internal/pluginhost/rpc_schema.go.
-type registrationRequest struct {
-	ConfigYAML    []byte `json:"config_yaml"`
-	SchemaVersion uint32 `json:"schema_version"`
-}
-
-func handleMethod(method string, request []byte) ([]byte, error) {
-	switch method {
-	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
-		var regReq registrationRequest
-		if len(request) > 0 {
-			_ = json.Unmarshal(request, &regReq)
-		}
-		applyRegistrationConfig(regReq.ConfigYAML)
-		return okEnvelope(registrationResponse())
-
-	case pluginabi.MethodModelStatic:
-		return okEnvelope(pluginapi.ModelResponse{Provider: providerName, Models: nil})
-
-	case pluginabi.MethodModelForAuth:
-		return handleModelForAuth(request)
-
-	case pluginabi.MethodAuthIdentifier, pluginabi.MethodExecutorIdentifier:
-		return okEnvelope(identifierResponse{Identifier: providerName})
-
-	case pluginabi.MethodAuthParse:
-		return handleAuthParse(request)
-
-	case pluginabi.MethodAuthLoginStart:
-		return handleAuthLoginStart(request)
-
-	case pluginabi.MethodAuthLoginPoll:
-		return handleAuthLoginPoll(request)
-
-	case pluginabi.MethodAuthRefresh:
-		return handleAuthRefresh(request)
-
-	case pluginabi.MethodExecutorExecute:
-		return handleExecExecute(request)
-
-	case pluginabi.MethodExecutorExecuteStream:
-		return handleExecStream(request)
-
-	case pluginabi.MethodExecutorCountTokens:
-		return handleCountTokens(request)
-
-	case pluginabi.MethodManagementRegister:
-		// Cache the host-injected prefixes so handleManagement does not hardcode
-		// /v0/management or the resource base.
-		var regReq pluginapi.ManagementRegistrationRequest
-		if err := json.Unmarshal(request, &regReq); err == nil {
-			setManagementBasePath(regReq.BasePath)
-			setResourceBasePath(regReq.ResourceBasePath)
-		}
-		return okEnvelope(managementRegistration())
-
-	case pluginabi.MethodManagementHandle:
-		return handleManagement(request)
-
-	default:
-		return errorEnvelope("unknown_method", "unknown method: "+method), nil
-	}
-}
-
-// -----------------------------------------------------------------------------
-// envelopes
-// -----------------------------------------------------------------------------
-
-type envelope struct {
-	OK     bool            `json:"ok"`
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  *envelopeError  `json:"error,omitempty"`
-}
-
-type envelopeError struct {
-	Code       string `json:"code"`
-	Message    string `json:"message"`
-	Retryable  bool   `json:"retryable,omitempty"`
-	HTTPStatus int    `json:"http_status,omitempty"`
-}
-
-type identifierResponse struct {
-	Identifier string `json:"identifier"`
-}
-
-func okEnvelope(v any) ([]byte, error) {
-	result, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(envelope{OK: true, Result: result})
-}
-
-func errorEnvelope(code, message string) []byte {
-	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message}})
-	return raw
-}
-
-func errorEnvelopeWithStatus(code, message string, status int) []byte {
-	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message, HTTPStatus: status}})
-	return raw
-}
-
+// writeResponse marshals the result into a C-owned buffer the host frees. It
+// lives here because it touches C symbols; every dispatch path funnels through
+// it.
 func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 	if response == nil || len(raw) == 0 {
 		return
@@ -274,6 +149,9 @@ func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 	response.len = C.size_t(len(raw))
 }
 
+// hostCall makes one call back into the CPA host (host.http.do, host.auth.list,
+// ...). It lives here because it touches C symbols; upstream.go and the
+// capability handlers call it through this single boundary.
 func hostCall(method string, payload []byte) ([]byte, error) {
 	if hostAPI == nil {
 		return nil, fmt.Errorf("host bridge unavailable")
@@ -293,18 +171,4 @@ func hostCall(method string, payload []byte) ([]byte, error) {
 	out := C.GoBytes(response.ptr, C.int(response.len))
 	C.free_host_buffer(response.ptr, response.len)
 	return out, nil
-}
-
-func hostBridgeUnwrap(raw []byte, method string) (json.RawMessage, error) {
-	var env envelope
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return nil, fmt.Errorf("%s: decode envelope: %w", method, err)
-	}
-	if !env.OK {
-		if env.Error != nil {
-			return nil, fmt.Errorf("%s: host error %s: %s", method, env.Error.Code, env.Error.Message)
-		}
-		return nil, fmt.Errorf("%s: host returned not-ok", method)
-	}
-	return env.Result, nil
 }

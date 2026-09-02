@@ -167,3 +167,26 @@ func testStoredAuth(t *testing.T) storedAuth {
 		Email:            "user@example.com",
 	}
 }
+
+// A pub/priv mismatch (hand-edited or truncated credential file) can never
+// produce a verifiable proof: fail at parse time with a precise message.
+func TestParsePrivateJWKRejectsMismatchedKeypair(t *testing.T) {
+	a, err := generateDeviceKeyPair()
+	if err != nil {
+		t.Fatalf("generateDeviceKeyPair() error = %v", err)
+	}
+	b, err := generateDeviceKeyPair()
+	if err != nil {
+		t.Fatalf("generateDeviceKeyPair() error = %v", err)
+	}
+	mixed := a.Private
+	mixed.X, mixed.Y = b.Private.X, b.Private.Y
+	if _, err := parsePrivateJWK(mixed); err == nil {
+		t.Fatal("expected a mismatched public point to be rejected")
+	} else if !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("error = %v, want it to name the mismatch", err)
+	}
+	if _, err := parsePrivateJWK(a.Private); err != nil {
+		t.Fatalf("a consistent keypair must parse: %v", err)
+	}
+}
