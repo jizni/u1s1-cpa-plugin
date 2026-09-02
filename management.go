@@ -1,0 +1,391 @@
+// management.go exposes the plugin's own management routes plus a browser panel
+// that shows u1s1 quota (the /v1/me packages view the CLI renders as `u1s1 usage`).
+//
+// Route boundaries follow the host contract:
+//   - /v0/management/plugins/u1s1/*   requires the management key.
+//   - /v0/resource/plugins/u1s1/panel serves the unauthenticated HTML shell; the
+//     page itself calls the management routes with the stored management key.
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+)
+
+type managementRoute struct {
+	Method      string `json:"method"`
+	Path        string `json:"path"`
+	Description string `json:"description,omitempty"`
+}
+
+type resourceRoute struct {
+	Path        string `json:"path"`
+	Menu        string `json:"menu,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+type managementRegistrationResponse struct {
+	Routes    []managementRoute `json:"routes,omitempty"`
+	Resources []resourceRoute   `json:"resources,omitempty"`
+}
+
+type managementRequestWire struct {
+	pluginapi.ManagementRequest
+	HostCallbackID string `json:"host_callback_id,omitempty"`
+}
+
+// The host injects its own prefixes at management.register; keep the historical
+// defaults for older hosts that do not send them.
+var (
+	basePathMu     sync.RWMutex
+	managementBase = "/v0/management"
+	resourceBase   = "/v0/resource/plugins/" + providerName
+)
+
+func setManagementBasePath(p string) {
+	p = strings.TrimRight(strings.TrimSpace(p), "/")
+	if p == "" {
+		return
+	}
+	basePathMu.Lock()
+	managementBase = p
+	basePathMu.Unlock()
+}
+
+func setResourceBasePath(p string) {
+	p = strings.TrimRight(strings.TrimSpace(p), "/")
+	if p == "" {
+		return
+	}
+	basePathMu.Lock()
+	resourceBase = p
+	basePathMu.Unlock()
+}
+
+func loadedManagementBase() string {
+	basePathMu.RLock()
+	defer basePathMu.RUnlock()
+	return managementBase
+}
+
+func loadedResourceBase() string {
+	basePathMu.RLock()
+	defer basePathMu.RUnlock()
+	return resourceBase
+}
+
+func managementRegistration() managementRegistrationResponse {
+	base := "/plugins/" + providerName
+	return managementRegistrationResponse{
+		Routes: []managementRoute{
+			{Method: http.MethodGet, Path: base + "/usage", Description: "u1s1 quota for all credentials: daily free allowance, balance, and packages."},
+			{Method: http.MethodPost, Path: base + "/refresh", Description: "Drop the cached quota snapshot and re-read /v1/me."},
+		},
+		Resources: []resourceRoute{
+			{Path: "/panel", Menu: "u1s1", Description: "u1s1 dashboard: free allowance, balance, and quota packages."},
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// quota snapshot cache
+// ---------------------------------------------------------------------------
+
+// usageCacheTTL keeps panel refreshes from spamming /v1/me. The gateway updates
+// package counters with some lag anyway, so a short cache costs no accuracy.
+const usageCacheTTL = 30 * time.Second
+
+type usageSnapshot struct {
+	fetchedAt time.Time
+	accounts  []accountUsage
+}
+
+type accountUsage struct {
+	AuthIndex string `json:"auth_index"`
+	Name      string `json:"name"`
+	Label     string `json:"label"`
+	Email     string `json:"email"`
+	Disabled  bool   `json:"disabled"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+
+	DailyFreeUSD          float64 `json:"daily_free_usd"`
+	DailyFreeUsedUSD      float64 `json:"daily_free_used_usd"`
+	DailyFreeRemainingUSD float64 `json:"daily_free_remaining_usd"`
+	DailyFreeResetsAt     string  `json:"daily_free_resets_at"`
+	DailyFreeModel        string  `json:"daily_free_model"`
+	RemainingUSD          float64 `json:"remaining_usd"`
+	BonusBalanceUSD       float64 `json:"bonus_balance_usd"`
+	MTDUSD                float64 `json:"mtd_usd"`
+	TokensPerUSD          float64 `json:"tokens_per_usd"`
+
+	Packages []packageUsage `json:"packages"`
+
+	// Aggregates over Packages so the panel does not recompute them.
+	TotalRemainingTokens int64 `json:"total_remaining_tokens"`
+	TotalUsedToday       int64 `json:"total_used_today"`
+}
+
+type packageUsage struct {
+	ID          int64  `json:"id"`
+	Kind        string `json:"kind"`
+	KindLabel   string `json:"kind_label"`
+	Scope       string `json:"scope"`
+	ScopeNote   string `json:"scope_note"`
+	DailyTokens int64  `json:"daily_tokens"`
+	TotalTokens int64  `json:"total_tokens"`
+	UsedToday   int64  `json:"used_today"`
+	UsedTokens  int64  `json:"used_tokens"`
+	Remaining   int64  `json:"remaining"`
+	ExpiresAt   string `json:"expires_at"`
+	Note        string `json:"note"`
+}
+
+var (
+	usageCacheMu sync.Mutex
+	usageCache   *usageSnapshot
+	// usageCollectMu serializes the /v1/me collection itself so concurrent panel
+	// refreshes produce one pass instead of one per viewer. It is deliberately
+	// separate from usageCacheMu: holding the cache lock across the round-trips
+	// would also block snapshotTime() and every cache hit.
+	usageCollectMu sync.Mutex
+)
+
+// packageLabels mirrors the CLI's PACKAGE_LABELS so the panel shows the same
+// Chinese names users see in `u1s1 usage`.
+var packageLabels = map[string]string{
+	"free_first":          "首月免费包",
+	"free_yearly":         "年度免费包",
+	"invite":              "邀请赠送",
+	"new_user":            "新用户赠送",
+	"login_checkin":       "登录打卡",
+	"login_checkin_bonus": "打卡加量",
+	"payment_delay_gift":  "临时加量包",
+	"topup_daily":         "每日加量包",
+	"admin_grant":         "官方赠送",
+}
+
+func packageLabel(kind string) string {
+	if label, ok := packageLabels[kind]; ok {
+		return label
+	}
+	return kind
+}
+
+// packageScopeNote explains where a package can be spent, matching the CLI text.
+func packageScopeNote(p gatewayPackage) string {
+	if p.Kind == "login_checkin" {
+		return "仅限 u1s1 客户端使用 · 全模型可用"
+	}
+	if p.Scope == "free" {
+		return "免费包适用模型 · 0 点恢复"
+	}
+	return "仅限 u1s1 客户端使用 · 免费包适用模型"
+}
+
+func derefInt64(v *int64) int64 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+// collectUsage reads /v1/me for every u1s1 credential the host knows about.
+// An error means enumeration itself failed (host bridge hiccup); per-credential
+// read failures are reported inline via accountUsage.Error instead.
+func collectUsage(callbackID string) ([]accountUsage, error) {
+	entries, err := hostAuthList()
+	if err != nil {
+		return nil, fmt.Errorf("host.auth.list: %w", err)
+	}
+	out := make([]accountUsage, 0, len(entries))
+	for _, entry := range entries {
+		item := accountUsage{
+			AuthIndex: entry.AuthIndex,
+			Name:      entry.Name,
+			Label:     entry.Label,
+			Disabled:  entry.Disabled,
+			Status:    entry.Status,
+		}
+		sa, _, errGet := hostAuthGet(entry.AuthIndex)
+		if errGet != nil {
+			item.Error = redactSecrets(errGet.Error())
+			out = append(out, item)
+			continue
+		}
+		item.Email = sa.Email
+		me, errMe := fetchMe(sa, attestationFor(entry.AuthIndex, sa, callbackID), callbackID)
+		if errMe != nil {
+			item.Error = redactSecrets(errMe.Error())
+			out = append(out, item)
+			continue
+		}
+		if me.Email != "" {
+			item.Email = me.Email
+		}
+		item.DailyFreeUSD = me.DailyFreeUSD
+		item.DailyFreeUsedUSD = me.DailyFreeUsedUSD
+		item.DailyFreeRemainingUSD = me.DailyFreeRemainingUSD
+		item.DailyFreeResetsAt = me.DailyFreeResetsAt
+		item.DailyFreeModel = me.DailyFreeModel
+		item.RemainingUSD = me.RemainingUSD
+		item.BonusBalanceUSD = me.BonusBalanceUSD
+		item.MTDUSD = me.MTDUSD
+		item.TokensPerUSD = me.TokensPerUSD
+		for _, p := range me.Packages {
+			item.Packages = append(item.Packages, packageUsage{
+				ID:          p.ID,
+				Kind:        p.Kind,
+				KindLabel:   packageLabel(p.Kind),
+				Scope:       p.Scope,
+				ScopeNote:   packageScopeNote(p),
+				DailyTokens: derefInt64(p.DailyTokens),
+				TotalTokens: derefInt64(p.TotalTokens),
+				UsedToday:   p.UsedToday,
+				UsedTokens:  p.UsedTokens,
+				Remaining:   p.Remaining,
+				ExpiresAt:   p.ExpiresAt,
+				Note:        p.Note,
+			})
+			item.TotalRemainingTokens += p.Remaining
+			item.TotalUsedToday += p.UsedToday
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func cachedUsage(callbackID string, force bool) ([]accountUsage, error) {
+	if accounts, ok := freshUsageSnapshot(force); ok {
+		return accounts, nil
+	}
+
+	// Collect outside usageCacheMu: /v1/me is one round-trip per credential, and
+	// blocking cache readers (including snapshotTime) for that long turns one slow
+	// account into a stalled panel.
+	usageCollectMu.Lock()
+	defer usageCollectMu.Unlock()
+
+	// A concurrent collection may have finished while we waited for the lock.
+	// Re-check even when force is set: the caller wants fresh data, not N passes.
+	if accounts, ok := freshUsageSnapshot(false); ok {
+		return accounts, nil
+	}
+
+	accounts, err := collectUsage(callbackID)
+	if err != nil {
+		// Enumeration hiccup: keep the previous snapshot rather than poisoning
+		// the cache with an empty list, which would make every credential
+		// vanish (with a fresh-looking timestamp) until the TTL expires.
+		hostLog("warn", "u1s1: usage refresh failed, keeping previous snapshot: "+redactSecrets(err.Error()))
+		usageCacheMu.Lock()
+		defer usageCacheMu.Unlock()
+		if usageCache != nil {
+			return usageCache.accounts, nil
+		}
+		return nil, err
+	}
+	usageCacheMu.Lock()
+	usageCache = &usageSnapshot{fetchedAt: time.Now(), accounts: accounts}
+	usageCacheMu.Unlock()
+	return accounts, nil
+}
+
+// freshUsageSnapshot returns the cached accounts when they are still inside the
+// TTL. force skips the TTL check but still allows the caller to reuse a snapshot
+// produced by a collection that overlapped this call.
+func freshUsageSnapshot(force bool) ([]accountUsage, bool) {
+	if force {
+		return nil, false
+	}
+	usageCacheMu.Lock()
+	defer usageCacheMu.Unlock()
+	if usageCache != nil && time.Since(usageCache.fetchedAt) < usageCacheTTL {
+		return usageCache.accounts, true
+	}
+	return nil, false
+}
+
+// ---------------------------------------------------------------------------
+// request handling
+// ---------------------------------------------------------------------------
+
+func handleManagement(raw []byte) ([]byte, error) {
+	var req managementRequestWire
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return nil, err
+	}
+	path := strings.TrimRight(req.Path, "/")
+
+	// Unauthenticated browser resource: serve the panel shell only. It carries no
+	// quota data; the page fetches that from the authenticated route below.
+	// Exact match only: a loose prefix would also swallow the bare base path,
+	// arbitrary subpaths, and sibling resources like .../u1s1-other/panel.
+	resPrefix := loadedResourceBase()
+	if req.Method == http.MethodGet && path == resPrefix+"/panel" {
+		return okEnvelope(htmlResponse(renderPanel()))
+	}
+
+	base := loadedManagementBase() + "/plugins/" + providerName
+	switch {
+	case req.Method == http.MethodGet && path == base+"/usage":
+		accounts, errUsage := cachedUsage(req.HostCallbackID, req.Query.Get("refresh") == "1")
+		if errUsage != nil {
+			// Nothing cached to fall back on: tell the client the enumeration
+			// failed instead of answering 200 with a look-alike empty list.
+			return okEnvelope(jsonResponse(http.StatusBadGateway, map[string]any{
+				"error": redactSecrets(errUsage.Error()),
+			}))
+		}
+		return okEnvelope(jsonResponse(http.StatusOK, map[string]any{
+			"accounts":    accounts,
+			"fetched_at":  snapshotTime(),
+			"cache_ttl_s": int(usageCacheTTL.Seconds()),
+		}))
+
+	case req.Method == http.MethodPost && path == base+"/refresh":
+		accounts, errUsage := cachedUsage(req.HostCallbackID, true)
+		if errUsage != nil {
+			return okEnvelope(jsonResponse(http.StatusBadGateway, map[string]any{
+				"error": redactSecrets(errUsage.Error()),
+			}))
+		}
+		return okEnvelope(jsonResponse(http.StatusOK, map[string]any{
+			"status":     "ok",
+			"accounts":   accounts,
+			"fetched_at": snapshotTime(),
+		}))
+
+	default:
+		return okEnvelope(jsonResponse(http.StatusNotFound, map[string]any{"error": "unknown route: " + path}))
+	}
+}
+
+func snapshotTime() string {
+	usageCacheMu.Lock()
+	defer usageCacheMu.Unlock()
+	if usageCache == nil {
+		return ""
+	}
+	return usageCache.fetchedAt.UTC().Format(time.RFC3339)
+}
+
+func jsonResponse(status int, v any) pluginapi.ManagementResponse {
+	body, _ := json.Marshal(v)
+	h := http.Header{}
+	h.Set("Content-Type", "application/json; charset=utf-8")
+	return pluginapi.ManagementResponse{StatusCode: status, Headers: h, Body: body}
+}
+
+func htmlResponse(body []byte) pluginapi.ManagementResponse {
+	h := http.Header{}
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	return pluginapi.ManagementResponse{StatusCode: http.StatusOK, Headers: h, Body: body}
+}

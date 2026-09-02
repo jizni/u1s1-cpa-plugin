@@ -1,0 +1,8 @@
+# Build artifacts (c-shared output)
+u1s1.so
+u1s1.h
+u1s1.dylib
+u1s1.dll
+
+# Compiled test/demo binary
+u1s1-cpa-plugin
