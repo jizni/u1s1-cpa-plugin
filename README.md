@@ -1,5 +1,8 @@
 # u1s1 CPA 插件
 
+[![CI](https://github.com/jizni/u1s1-cpa-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/jizni/u1s1-cpa-plugin/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 一个 CLIProxyAPI（CPA）插件，把 [u1s1](https://u1s1.io) 网关（`https://api.u1s1.io/v1`）接成原生 provider。
 
 ## 目录
