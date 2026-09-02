@@ -124,6 +124,10 @@ type accountUsage struct {
 	BonusBalanceUSD       float64 `json:"bonus_balance_usd"`
 	MTDUSD                float64 `json:"mtd_usd"`
 	TokensPerUSD          float64 `json:"tokens_per_usd"`
+	// FreeClaim is "first" or "renew" when a free quota package is waiting to be
+	// claimed on the website. The claim itself needs a browser session plus two
+	// captchas, so the panel can only point the user there.
+	FreeClaim string `json:"free_claim,omitempty"`
 
 	Packages []packageUsage `json:"packages"`
 
@@ -165,7 +169,7 @@ var packageLabels = map[string]string{
 	"invite":              "邀请赠送",
 	"new_user":            "新用户赠送",
 	"login_checkin":       "登录打卡",
-	"login_checkin_bonus": "打卡加量",
+	"login_checkin_bonus": "打卡加成",
 	"payment_delay_gift":  "临时加量包",
 	"topup_daily":         "每日加量包",
 	"admin_grant":         "官方赠送",
@@ -205,6 +209,7 @@ func collectUsage(callbackID string) ([]accountUsage, error) {
 		return nil, fmt.Errorf("host.auth.list: %w", err)
 	}
 	out := make([]accountUsage, 0, len(entries))
+	announcementRefreshed := false
 	for _, entry := range entries {
 		item := accountUsage{
 			AuthIndex: entry.AuthIndex,
@@ -220,7 +225,14 @@ func collectUsage(callbackID string) ([]accountUsage, error) {
 			continue
 		}
 		item.Email = sa.Email
-		me, errMe := fetchMe(sa, attestationFor(entry.AuthIndex, sa, callbackID), callbackID)
+		attestation := attestationFor(entry.AuthIndex, sa, callbackID)
+		// One credential is enough to read the shared notice, and this pass is
+		// already the panel's slow path.
+		if !announcementRefreshed {
+			refreshAnnouncementIfStale(sa, attestation, callbackID)
+			announcementRefreshed = true
+		}
+		me, errMe := fetchMe(sa, attestation, callbackID)
 		if errMe != nil {
 			item.Error = redactSecrets(errMe.Error())
 			out = append(out, item)
@@ -238,6 +250,9 @@ func collectUsage(callbackID string) ([]accountUsage, error) {
 		item.BonusBalanceUSD = me.BonusBalanceUSD
 		item.MTDUSD = me.MTDUSD
 		item.TokensPerUSD = me.TokensPerUSD
+		if me.FreeClaim == "first" || me.FreeClaim == "renew" {
+			item.FreeClaim = me.FreeClaim
+		}
 		for _, p := range me.Packages {
 			item.Packages = append(item.Packages, packageUsage{
 				ID:          p.ID,
@@ -344,9 +359,10 @@ func handleManagement(raw []byte) ([]byte, error) {
 			}))
 		}
 		return okEnvelope(jsonResponse(http.StatusOK, map[string]any{
-			"accounts":    accounts,
-			"fetched_at":  snapshotTime(),
-			"cache_ttl_s": int(usageCacheTTL.Seconds()),
+			"accounts":     accounts,
+			"announcement": currentAnnouncement(),
+			"fetched_at":   snapshotTime(),
+			"cache_ttl_s":  int(usageCacheTTL.Seconds()),
 		}))
 
 	case req.Method == http.MethodPost && path == base+"/refresh":
@@ -357,9 +373,10 @@ func handleManagement(raw []byte) ([]byte, error) {
 			}))
 		}
 		return okEnvelope(jsonResponse(http.StatusOK, map[string]any{
-			"status":     "ok",
-			"accounts":   accounts,
-			"fetched_at": snapshotTime(),
+			"status":       "ok",
+			"accounts":     accounts,
+			"announcement": currentAnnouncement(),
+			"fetched_at":   snapshotTime(),
 		}))
 
 	default:

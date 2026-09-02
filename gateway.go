@@ -340,13 +340,42 @@ type gatewayError struct {
 	} `json:"error"`
 }
 
-// gatewayMessage extracts { error: { message } } or falls back to a status hint.
+// gatewayMessage extracts { error: { message } } and appends the tail the
+// official CLI shows (dist/error-humanize.js): HTTP status, error code, and the
+// gateway request id. The plain message alone is often all a client renders, so
+// without the tail a user reporting a problem has no id to quote and the
+// quota-exhausted case is indistinguishable from a transient failure.
 func gatewayMessage(body []byte, status int) string {
 	var ge gatewayError
 	if err := json.Unmarshal(body, &ge); err == nil && ge.Error.Message != "" {
-		return ge.Error.Message
+		return ge.Error.Message + errorTail(ge, status)
 	}
 	return fmt.Sprintf("upstream %d: %s", status, truncate(strings.TrimSpace(string(body)), 200))
+}
+
+// errorTail formats the " (HTTP 429 · insufficient_quota · 请求编号 …)" suffix.
+// The code names follow the CLI so the same text keeps its meaning on both
+// clients; insufficient_quota in particular marks "do not retry, the quota is
+// gone" rather than a rate limit.
+func errorTail(ge gatewayError, status int) string {
+	code := ge.Error.Code
+	if ge.Error.Type == "insufficient_quota" || code == "quota_exceeded" {
+		code = "insufficient_quota"
+	}
+	tags := make([]string, 0, 3)
+	if status > 0 {
+		tags = append(tags, fmt.Sprintf("HTTP %d", status))
+	}
+	if strings.TrimSpace(code) != "" {
+		tags = append(tags, code)
+	}
+	if id := strings.TrimSpace(ge.Error.RequestID); id != "" {
+		tags = append(tags, "请求编号 "+truncate(id, 64))
+	}
+	if len(tags) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(tags, " · ") + ")"
 }
 
 type modelThinking struct {
@@ -379,7 +408,7 @@ func storeThinkingProfile(m gatewayModel) {
 	if id == "" {
 		return
 	}
-	if !m.Reasoning || m.Thinking == nil || len(m.Thinking.Levels) == 0 {
+	if !m.hasThinking() {
 		thinkingProfiles.Delete(id)
 		return
 	}
@@ -438,6 +467,56 @@ type gatewayModel struct {
 	ContextLength int64          `json:"context_length"`
 	MaxTokens     int64          `json:"max_tokens"`
 	Thinking      *modelThinking `json:"thinking"`
+	// FreePackageEligible reports whether the free quota package pays for this
+	// model. A pointer because older gateways omit it, and "unknown" must not
+	// read as "not covered".
+	FreePackageEligible *bool            `json:"free_package_eligible"`
+	Price               *modelPrice      `json:"price"`
+	PriceBands          *modelPriceBands `json:"price_bands"`
+}
+
+// modelPrice is USD per million tokens, display only: billing is server-side.
+type modelPrice struct {
+	Input     float64  `json:"input"`
+	Output    float64  `json:"output"`
+	CacheRead *float64 `json:"cache_read"`
+}
+
+// blended averages input and output price, matching the CLI's cost comparison.
+func (p *modelPrice) blended() float64 {
+	if p == nil {
+		return 0
+	}
+	return (p.Input + p.Output) / 2
+}
+
+// modelPriceBands carries peak/off-peak rates for models that switch during
+// Beijing business hours. Current names the band in effect right now; the
+// band objects use camelCase keys upstream, unlike price.cache_read.
+type modelPriceBands struct {
+	Current string     `json:"current"`
+	Peak    *bandPrice `json:"peak"`
+	OffPeak *bandPrice `json:"off_peak"`
+}
+
+type bandPrice struct {
+	Input     float64 `json:"input"`
+	Output    float64 `json:"output"`
+	CacheRead float64 `json:"cacheRead"`
+}
+
+// hasThinking reports whether the gateway advertised usable reasoning levels.
+// The reasoning flag alone is not the test: the CLI treats thinking metadata as
+// sufficient (apiModelToDef), and levels are what the executor actually needs.
+func (m gatewayModel) hasThinking() bool {
+	return m.Thinking != nil && len(m.Thinking.Levels) > 0
+}
+
+// freeEligible reports free-package coverage, defaulting to false when the
+// gateway omits the field. Callers that must distinguish "unknown" from "not
+// covered" test FreePackageEligible directly.
+func (m gatewayModel) freeEligible() bool {
+	return m.FreePackageEligible != nil && *m.FreePackageEligible
 }
 
 type clientAttestation struct {
@@ -446,10 +525,92 @@ type clientAttestation struct {
 }
 
 type modelsResponse struct {
-	Object            string             `json:"object"`
-	Data              []gatewayModel     `json:"data"`
-	Features          map[string]any     `json:"features"`
-	ClientAttestation *clientAttestation `json:"client_attestation"`
+	Object            string               `json:"object"`
+	Data              []gatewayModel       `json:"data"`
+	Features          map[string]any       `json:"features"`
+	Announcement      *gatewayAnnouncement `json:"announcement"`
+	ClientAttestation *clientAttestation   `json:"client_attestation"`
+}
+
+// gatewayAnnouncement is the operator notice the gateway ships with every
+// models response. The official CLI polls for it during a session because a
+// maintenance window otherwise only surfaces as bare request failures; the
+// panel is the equivalent surface here.
+type gatewayAnnouncement struct {
+	Text string `json:"text"`
+	URL  string `json:"url,omitempty"`
+}
+
+const maxAnnouncementChars = 2000
+
+// announcementTTL bounds how stale the panel's copy of the notice may get. It
+// matches modelCacheTTL: both are refreshed by the same /v1/models call.
+const announcementTTL = 5 * time.Minute
+
+var (
+	announcementMu        sync.RWMutex
+	announcementSeen      *gatewayAnnouncement
+	announcementFetchedAt time.Time
+)
+
+// storeAnnouncement records the notice from the latest models response,
+// including its absence: a cleared announcement must disappear from the panel.
+// The URL is validated here because the panel renders it as a link.
+func storeAnnouncement(a *gatewayAnnouncement) {
+	var next *gatewayAnnouncement
+	if a != nil && strings.TrimSpace(a.Text) != "" {
+		next = &gatewayAnnouncement{Text: truncate(strings.TrimSpace(a.Text), maxAnnouncementChars)}
+		if url := strings.TrimSpace(a.URL); isHTTPURL(url) {
+			next.URL = url
+		}
+	}
+	announcementMu.Lock()
+	announcementSeen = next
+	announcementFetchedAt = time.Now()
+	announcementMu.Unlock()
+}
+
+func currentAnnouncement() *gatewayAnnouncement {
+	announcementMu.RLock()
+	defer announcementMu.RUnlock()
+	if announcementSeen == nil {
+		return nil
+	}
+	copied := *announcementSeen
+	return &copied
+}
+
+// refreshAnnouncementIfStale re-reads /v1/models when the cached notice is older
+// than announcementTTL. Chat traffic refreshes it as a side effect, but a host
+// that only serves a fixed model would otherwise keep a maintenance notice from
+// hours ago; the panel is the only place this plugin can show one at all.
+// Failures are ignored: a stale notice beats a failed panel load.
+func refreshAnnouncementIfStale(sa storedAuth, attestation, callbackID string) {
+	announcementMu.RLock()
+	fresh := !announcementFetchedAt.IsZero() && time.Since(announcementFetchedAt) < announcementTTL
+	announcementMu.RUnlock()
+	if fresh {
+		return
+	}
+	if _, err := fetchModels(sa, attestation, callbackID); err != nil {
+		hostLog("debug", "u1s1: announcement refresh failed: "+redactSecrets(err.Error()))
+	}
+}
+
+// isHTTPURL keeps javascript:/data: payloads out of the panel's link href.
+func isHTTPURL(raw string) bool {
+	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
+		return false
+	}
+	if len(raw) > 2048 {
+		return false
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] < 0x20 || raw[i] == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // fetchModels calls GET /v1/models. attestation may be empty: the models route
@@ -477,25 +638,29 @@ func fetchModels(sa storedAuth, attestation, callbackID string) (*modelsResponse
 	for _, m := range decoded.Data {
 		storeThinkingProfile(m)
 	}
+	storeAnnouncement(decoded.Announcement)
 	return &decoded, nil
 }
 
 type meResponse struct {
-	Email                 string           `json:"email"`
-	SignupCreditUSD       float64          `json:"signup_credit_usd"`
-	DailyFreeUSD          float64          `json:"daily_free_usd"`
-	DailyFreeUsedUSD      float64          `json:"daily_free_used_usd"`
-	DailyFreeRemainingUSD float64          `json:"daily_free_remaining_usd"`
-	DailyFreeResetsAt     string           `json:"daily_free_resets_at"`
-	DailyFreeModel        string           `json:"daily_free_model"`
-	MonthlyFreeUSD        float64          `json:"monthly_free_usd"`
-	MTDUSD                float64          `json:"mtd_usd"`
-	BalanceSpentUSD       float64          `json:"balance_spent_usd"`
-	BonusBalanceUSD       float64          `json:"bonus_balance_usd"`
-	RemainingUSD          float64          `json:"remaining_usd"`
-	FreeClaim             any              `json:"free_claim"`
-	TokensPerUSD          float64          `json:"tokens_per_usd"`
-	Packages              []gatewayPackage `json:"packages"`
+	Email                 string  `json:"email"`
+	SignupCreditUSD       float64 `json:"signup_credit_usd"`
+	DailyFreeUSD          float64 `json:"daily_free_usd"`
+	DailyFreeUsedUSD      float64 `json:"daily_free_used_usd"`
+	DailyFreeRemainingUSD float64 `json:"daily_free_remaining_usd"`
+	DailyFreeResetsAt     string  `json:"daily_free_resets_at"`
+	DailyFreeModel        string  `json:"daily_free_model"`
+	MonthlyFreeUSD        float64 `json:"monthly_free_usd"`
+	MTDUSD                float64 `json:"mtd_usd"`
+	BalanceSpentUSD       float64 `json:"balance_spent_usd"`
+	BonusBalanceUSD       float64 `json:"bonus_balance_usd"`
+	RemainingUSD          float64 `json:"remaining_usd"`
+	// FreeClaim is "first" (signup package) or "renew" (yearly package) when the
+	// account has a free quota package waiting to be claimed on the website, and
+	// null/absent otherwise.
+	FreeClaim    string           `json:"free_claim"`
+	TokensPerUSD float64          `json:"tokens_per_usd"`
+	Packages     []gatewayPackage `json:"packages"`
 }
 
 // gatewayPackage is one quota package as reported by /v1/me.

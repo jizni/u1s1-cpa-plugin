@@ -5,6 +5,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -57,11 +60,12 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	models := make([]pluginapi.ModelInfo, 0, len(resp.Data))
+	baseBlended := baseModelBlendedPrice(resp.Data)
 	for _, m := range resp.Data {
 		if strings.TrimSpace(m.ID) == "" {
 			continue
 		}
-		models = append(models, toModelInfo(m))
+		models = append(models, toModelInfo(m, modelDescription(m, baseBlended)))
 	}
 	modelCache.Store(cacheKey, modelCacheEntry{models: models, fetchedAt: time.Now()})
 
@@ -83,7 +87,7 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 	return okEnvelope(out)
 }
 
-func toModelInfo(m gatewayModel) pluginapi.ModelInfo {
+func toModelInfo(m gatewayModel, description string) pluginapi.ModelInfo {
 	display := m.Name
 	if display == "" {
 		display = m.ID
@@ -98,6 +102,7 @@ func toModelInfo(m gatewayModel) pluginapi.ModelInfo {
 		OwnedBy:                    owned,
 		DisplayName:                display,
 		Name:                       m.ID,
+		Description:                description,
 		SupportedGenerationMethods: []string{"chat"},
 		ContextLength:              m.ContextLength,
 		InputTokenLimit:            m.ContextLength,
@@ -110,7 +115,10 @@ func toModelInfo(m gatewayModel) pluginapi.ModelInfo {
 	}
 	info.SupportedInputModalities = inputs
 	info.SupportedOutputModalities = []string{"text"}
-	if m.Reasoning && m.Thinking != nil {
+	// Thinking metadata alone marks a reasoning model, as in the CLI's
+	// apiModelToDef (reasoning = m.reasoning || thinking !== undefined): the
+	// gateway may ship levels for a model whose reasoning flag is false.
+	if m.hasThinking() {
 		info.Thinking = &pluginapi.ThinkingSupport{
 			ZeroAllowed:    m.Thinking.CanDisable,
 			DynamicAllowed: true,
@@ -118,4 +126,82 @@ func toModelInfo(m gatewayModel) pluginapi.ModelInfo {
 		}
 	}
 	return info
+}
+
+// defaultFreeModelID is the gateway's own reference model for quota accounting
+// (/v1/me reports daily_free_model), and the CLI's built-in default. Price
+// multiples in model notes are relative to it.
+const defaultFreeModelID = "deepseek-v4-flash"
+
+// baseModelBlendedPrice returns the blended price the "N times the default
+// model" note compares against: the default free model, else the first
+// free-package-eligible one, mirroring the CLI's deriveModelNote base pick.
+func baseModelBlendedPrice(models []gatewayModel) float64 {
+	var fallback *modelPrice
+	for i := range models {
+		if models[i].ID == defaultFreeModelID {
+			return models[i].Price.blended()
+		}
+		if fallback == nil && models[i].freeEligible() {
+			fallback = models[i].Price
+		}
+	}
+	return fallback.blended()
+}
+
+// modelDescription is the one-line note clients see next to the model id. It
+// mirrors what the official CLI puts in its model picker: whether the free quota
+// package pays for this model, how much dearer it is than the default, and the
+// current price — the three things that decide whether a request costs money.
+func modelDescription(m gatewayModel, baseBlended float64) string {
+	parts := make([]string, 0, 2)
+	if note := freePackageNote(m, baseBlended); note != "" {
+		parts = append(parts, note)
+	}
+	if note := priceNote(m); note != "" {
+		parts = append(parts, note)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// freePackageNote renders the free-package coverage of one model. An absent
+// free_package_eligible field (older gateway) yields no note at all rather than
+// a guess in either direction.
+func freePackageNote(m gatewayModel, baseBlended float64) string {
+	if m.FreePackageEligible == nil {
+		return ""
+	}
+	if *m.FreePackageEligible {
+		return "免费用量包可抵扣"
+	}
+	if baseBlended > 0 {
+		if mult := int(math.Round(m.Price.blended() / baseBlended)); mult >= 2 {
+			return fmt.Sprintf("不走免费包 · 费用约为默认模型 %d 倍", mult)
+		}
+	}
+	return "不走免费包，用余额或全模型包"
+}
+
+// priceNote formats USD per million tokens, naming the active band for models
+// that switch between peak and off-peak rates during Beijing business hours.
+func priceNote(m gatewayModel) string {
+	if m.Price == nil {
+		return ""
+	}
+	note := "$" + formatUSD(m.Price.Input) + "/$" + formatUSD(m.Price.Output) + " 每百万 token"
+	switch {
+	case m.PriceBands == nil:
+		return note
+	case m.PriceBands.Current == "peak":
+		return note + "（峰/闲价 · 当前峰时价）"
+	case m.PriceBands.Current == "off_peak":
+		return note + "（峰/闲价 · 当前闲时价）"
+	default:
+		return note + "（峰/闲价）"
+	}
+}
+
+// formatUSD prints a price without trailing zeros: 0.22, 0.075, 0.
+func formatUSD(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
 }

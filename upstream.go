@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 )
@@ -419,9 +420,16 @@ func isTokenChar(c byte) bool {
 	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '-' || c == '_'
 }
 
+// truncate caps a string at max bytes without splitting a UTF-8 rune. The inputs
+// are gateway text (Chinese error messages, announcements), so a byte cut
+// mid-rune would put invalid UTF-8 into JSON responses and logs.
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return s[:max] + "…"
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }

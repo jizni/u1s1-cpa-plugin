@@ -619,3 +619,187 @@ func TestCountTokensEstimatesPrompt(t *testing.T) {
 		t.Fatal("unparseable bodies must fall back to a size-based estimate")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 9. the live catalogue must carry the pricing metadata clients decide on
+// ---------------------------------------------------------------------------
+
+// The gateway's model list is the only place free-package coverage and price
+// live. Without them a client picking "the cheap model" has to guess, and on
+// u1s1 that guess is the difference between free and paid, so model.for_auth
+// mirrors the note the official CLI shows in its picker.
+func TestModelDescriptionMirrorsCLINote(t *testing.T) {
+	price := func(in, out float64) *modelPrice { return &modelPrice{Input: in, Output: out} }
+	yes, no := true, false
+	catalogue := []gatewayModel{
+		{ID: defaultFreeModelID, FreePackageEligible: &yes, Price: price(0.22, 0.66)},
+		{ID: "deepseek-v4-pro", FreePackageEligible: &no, Price: price(0.66, 1.98)},
+		{ID: "slightly-dearer", FreePackageEligible: &no, Price: price(0.24, 0.7)},
+		{ID: "legacy-gateway-model", Price: price(1, 1)},
+	}
+	base := baseModelBlendedPrice(catalogue)
+	if base != 0.44 {
+		t.Fatalf("base blended price = %v, want the default free model's", base)
+	}
+
+	free := modelDescription(catalogue[0], base)
+	if !strings.Contains(free, "免费用量包可抵扣") || !strings.Contains(free, "$0.22/$0.66") {
+		t.Fatalf("free model description = %q", free)
+	}
+	// 3x the default: the multiple is what stops a user from casually burning
+	// paid balance on the Pro model.
+	if paid := modelDescription(catalogue[1], base); !strings.Contains(paid, "3 倍") {
+		t.Fatalf("paid model description = %q, want the price multiple", paid)
+	}
+	// Under 2x the multiple is noise; the coverage warning still has to show.
+	near := modelDescription(catalogue[2], base)
+	if strings.Contains(near, "倍") || !strings.Contains(near, "不走免费包") {
+		t.Fatalf("near-price model description = %q", near)
+	}
+	// An older gateway omits free_package_eligible: no coverage claim either way.
+	legacy := modelDescription(catalogue[3], base)
+	if strings.Contains(legacy, "免费包") {
+		t.Fatalf("unknown coverage must not be described as covered or not: %q", legacy)
+	}
+	if !strings.Contains(legacy, "每百万 token") {
+		t.Fatalf("legacy model description = %q, want the price kept", legacy)
+	}
+}
+
+// Peak/off-peak models bill at double during Beijing business hours, so the
+// note has to name the band that is actually in effect.
+func TestModelDescriptionNamesActivePriceBand(t *testing.T) {
+	m := gatewayModel{
+		ID:         "deepseek-v4-flash",
+		Price:      &modelPrice{Input: 0.44, Output: 1.32},
+		PriceBands: &modelPriceBands{Current: "peak", Peak: &bandPrice{Input: 0.44, Output: 1.32}, OffPeak: &bandPrice{Input: 0.22, Output: 0.66}},
+	}
+	if got := modelDescription(m, 0); !strings.Contains(got, "当前峰时价") {
+		t.Fatalf("description = %q, want the active band named", got)
+	}
+	m.PriceBands.Current = "off_peak"
+	if got := modelDescription(m, 0); !strings.Contains(got, "当前闲时价") {
+		t.Fatalf("description = %q, want the off-peak band named", got)
+	}
+	// A model without bands must not grow a band label.
+	flat := gatewayModel{ID: "qwen3.8-flash", Price: &modelPrice{Input: 0.16, Output: 0.47}}
+	if got := modelDescription(flat, 0); strings.Contains(got, "峰") {
+		t.Fatalf("flat-priced model description = %q", got)
+	}
+	// Prices must not gain trailing zeros: the CLI prints 0.075, not 0.08.
+	if got := priceNote(gatewayModel{Price: &modelPrice{Input: 0.075, Output: 0.25}}); !strings.Contains(got, "$0.075/$0.25") {
+		t.Fatalf("price note = %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 10. the gateway announcement must reach the panel
+// ---------------------------------------------------------------------------
+
+// Announcements carry maintenance windows and policy notices. The official CLI
+// polls for them mid-session precisely because an outage otherwise shows up only
+// as failing requests; the panel is the equivalent surface for this plugin.
+func TestModelsResponseCapturesAnnouncement(t *testing.T) {
+	t.Cleanup(func() { storeAnnouncement(nil) })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"deepseek-v4-flash"}],
+"announcement":{"text":"维护公告：今晚 02:00 起短暂重启","url":"https://u1s1.io/announcements"}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	if _, err := fetchModels(storedAuthFor(t, srv.URL), "", ""); err != nil {
+		t.Fatalf("fetchModels() error = %v", err)
+	}
+	got := currentAnnouncement()
+	if got == nil || !strings.Contains(got.Text, "维护公告") {
+		t.Fatalf("announcement = %+v", got)
+	}
+	if got.URL != "https://u1s1.io/announcements" {
+		t.Fatalf("announcement URL = %q", got.URL)
+	}
+
+	// A cleared announcement must disappear rather than linger from an earlier
+	// response, and the panel must never receive a non-http URL to link.
+	storeAnnouncement(&gatewayAnnouncement{Text: "x", URL: "javascript:alert(1)"})
+	if got := currentAnnouncement(); got == nil || got.URL != "" {
+		t.Fatalf("announcement = %+v, want the non-http URL dropped", got)
+	}
+	storeAnnouncement(&gatewayAnnouncement{Text: "   "})
+	if currentAnnouncement() != nil {
+		t.Fatal("a blank announcement must clear the previous one")
+	}
+}
+
+// The panel reads the announcement from the authenticated usage route, so the
+// route has to publish it alongside the accounts.
+func TestManagementUsageIncludesAnnouncement(t *testing.T) {
+	t.Cleanup(func() { storeAnnouncement(nil) })
+	storeAnnouncement(&gatewayAnnouncement{Text: "维护公告", URL: "https://u1s1.io/announcements"})
+
+	usageCacheMu.Lock()
+	prev := usageCache
+	usageCache = &usageSnapshot{fetchedAt: time.Now(), accounts: []accountUsage{{Name: "u1s1-a.json"}}}
+	usageCacheMu.Unlock()
+	t.Cleanup(func() {
+		usageCacheMu.Lock()
+		usageCache = prev
+		usageCacheMu.Unlock()
+	})
+
+	payload, _ := json.Marshal(managementRequestWire{ManagementRequest: pluginapi.ManagementRequest{
+		Method: http.MethodGet,
+		Path:   "/v0/management/plugins/u1s1/usage",
+	}})
+	raw, err := handleMethod(pluginabi.MethodManagementHandle, payload)
+	if err != nil {
+		t.Fatalf("management.handle error = %v", err)
+	}
+	var resp pluginapi.ManagementResponse
+	unwrapResult(t, raw, &resp)
+	var body struct {
+		Announcement *gatewayAnnouncement `json:"announcement"`
+	}
+	if err := json.Unmarshal(resp.Body, &body); err != nil {
+		t.Fatalf("unmarshal usage body: %v", err)
+	}
+	if body.Announcement == nil || body.Announcement.Text != "维护公告" {
+		t.Fatalf("announcement = %+v", body.Announcement)
+	}
+}
+
+// A notice can appear hours after the last chat request, so the panel refreshes
+// a stale copy itself instead of relying on model traffic to carry it.
+func TestAnnouncementRefreshRespectsTTL(t *testing.T) {
+	t.Cleanup(func() { storeAnnouncement(nil) })
+
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[],"announcement":{"text":"新公告"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	sa := storedAuthFor(t, srv.URL)
+
+	// A fresh cache must not cost a round-trip on every panel load.
+	storeAnnouncement(&gatewayAnnouncement{Text: "缓存的公告"})
+	refreshAnnouncementIfStale(sa, "", "")
+	if got := atomic.LoadInt32(&calls); got != 0 {
+		t.Fatalf("models calls = %d, want none while the notice is fresh", got)
+	}
+
+	// Age the cache past the TTL: the next panel load picks up the new notice.
+	announcementMu.Lock()
+	announcementFetchedAt = time.Now().Add(-2 * announcementTTL)
+	announcementMu.Unlock()
+	refreshAnnouncementIfStale(sa, "", "")
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("models calls = %d, want exactly one refresh", got)
+	}
+	if got := currentAnnouncement(); got == nil || got.Text != "新公告" {
+		t.Fatalf("announcement = %+v, want the refreshed notice", got)
+	}
+}
+

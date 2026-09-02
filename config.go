@@ -13,8 +13,10 @@ const (
 	providerName   = "u1s1"
 	defaultBaseURL = "https://api.u1s1.io/v1"
 	defaultClient  = "terminal"
-	// Client version reported to the gateway; matches the installed u1s1 CLI.
-	defaultClientVersion = "1.3.2"
+	// Client version reported to the gateway; matches the installed u1s1 CLI
+	// (u1s1-cli 1.4.1). The gateway's integrity check tells users to "升级并重新
+	// 登录 u1s1", so this must track real CLI releases.
+	defaultClientVersion = "1.4.1"
 	defaultUserAgent     = "pi (linux 6.12.86+deb13-cloud-amd64; x64)"
 	// OpenAI SDK fingerprint echoed by the pi coding agent.
 	stainlessPackageVersion = "6.40.0"
@@ -101,7 +103,7 @@ func registrationResponse() registration {
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "base-url", Type: pluginapi.ConfigFieldTypeString, Description: "u1s1 gateway base URL including /v1 (default https://api.u1s1.io/v1)."},
 				{Name: "client", Type: pluginapi.ConfigFieldTypeString, Description: "Value of the x-u1s1-client header (default terminal)."},
-				{Name: "client-version", Type: pluginapi.ConfigFieldTypeString, Description: "Value of the x-u1s1-version header (default 1.3.2)."},
+				{Name: "client-version", Type: pluginapi.ConfigFieldTypeString, Description: "Value of the x-u1s1-version header (default 1.4.1)."},
 				{Name: "user-agent", Type: pluginapi.ConfigFieldTypeString, Description: "User-Agent sent upstream; the gateway checks the pi client fingerprint."},
 			},
 		},

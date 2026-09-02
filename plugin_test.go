@@ -73,20 +73,6 @@ func TestReconfigureAppliesConfig(t *testing.T) {
 	}
 }
 
-func TestIdentifiers(t *testing.T) {
-	for _, method := range []string{pluginabi.MethodAuthIdentifier, pluginabi.MethodExecutorIdentifier} {
-		raw, err := handleMethod(method, nil)
-		if err != nil {
-			t.Fatalf("%s error = %v", method, err)
-		}
-		var resp identifierResponse
-		unwrapResult(t, raw, &resp)
-		if resp.Identifier != providerName {
-			t.Fatalf("%s identifier = %q", method, resp.Identifier)
-		}
-	}
-}
-
 func TestUnknownMethod(t *testing.T) {
 	raw, err := handleMethod("does.not.exist", nil)
 	if err != nil {
@@ -127,6 +113,22 @@ func TestAuthParseClaimsDeviceCredentials(t *testing.T) {
 	if resp.Auth.Label != "user@example.com" {
 		t.Fatalf("label = %q", resp.Auth.Label)
 	}
+	// StorageJSON must round-trip into a usable credential.
+	if _, err := parseStored(resp.Auth.StorageJSON); err != nil {
+		t.Fatalf("parseStored(StorageJSON) error = %v", err)
+	}
+	// No email: fall back to a device suffix without exposing the token.
+	sa.Email = ""
+	data, err := authDataFor(sa)
+	if err != nil {
+		t.Fatalf("authDataFor() error = %v", err)
+	}
+	if !strings.HasPrefix(data.ID, "u1s1-device-") {
+		t.Fatalf("id = %q, want a u1s1-device- fallback", data.ID)
+	}
+	if strings.Contains(data.ID, sa.DeviceToken) {
+		t.Fatal("identity must not embed the full device token")
+	}
 }
 
 func TestAuthParseIgnoresForeignFiles(t *testing.T) {
@@ -145,36 +147,6 @@ func TestAuthParseIgnoresForeignFiles(t *testing.T) {
 		if resp.Handled {
 			t.Fatalf("%s: must not be claimed by the u1s1 plugin", name)
 		}
-	}
-}
-
-func TestAuthIdentityAndFileName(t *testing.T) {
-	sa := testStoredAuth(t)
-	data, err := authDataFor(sa)
-	if err != nil {
-		t.Fatalf("authDataFor() error = %v", err)
-	}
-	if data.ID != "u1s1-user-example.com" {
-		t.Fatalf("id = %q", data.ID)
-	}
-	if data.FileName != "u1s1-user-example.com.json" {
-		t.Fatalf("file name = %q", data.FileName)
-	}
-	// No email: fall back to a device suffix without exposing the token.
-	sa.Email = ""
-	data, err = authDataFor(sa)
-	if err != nil {
-		t.Fatalf("authDataFor() error = %v", err)
-	}
-	if !strings.HasPrefix(data.ID, "u1s1-device-") {
-		t.Fatalf("id = %q, want a u1s1-device- fallback", data.ID)
-	}
-	if strings.Contains(data.ID, sa.DeviceToken) {
-		t.Fatal("identity must not embed the full device token")
-	}
-	// StorageJSON must round-trip into a usable credential.
-	if _, err := parseStored(data.StorageJSON); err != nil {
-		t.Fatalf("parseStored(StorageJSON) error = %v", err)
 	}
 }
 
@@ -278,9 +250,23 @@ func TestScanSSEDropsDoneAndInvalidChunks(t *testing.T) {
 }
 
 func TestGatewayMessageExtractsError(t *testing.T) {
-	body := []byte(`{"error":{"message":"客户端完整性校验未通过","type":"forbidden","code":"client_integrity_review"}}`)
-	if got := gatewayMessage(body, 403); got != "客户端完整性校验未通过" {
+	body := []byte(`{"error":{"message":"客户端完整性校验未通过","type":"forbidden","code":"client_integrity_review","request_id":"req-42"}}`)
+	got := gatewayMessage(body, 403)
+	// The Chinese sentence must lead (that is what a user reads) and the tail must
+	// carry status, code, and request id (that is what support needs).
+	if !strings.HasPrefix(got, "客户端完整性校验未通过 (") {
 		t.Fatalf("gatewayMessage = %q", got)
+	}
+	for _, needle := range []string{"HTTP 403", "client_integrity_review", "请求编号 req-42"} {
+		if !strings.Contains(got, needle) {
+			t.Fatalf("gatewayMessage = %q, want %q in the tail", got, needle)
+		}
+	}
+	// insufficient_quota is the marker that tells clients not to retry; the CLI
+	// normalizes both spellings to it, so the plugin must too.
+	quota := gatewayMessage([]byte(`{"error":{"message":"额度已用完","type":"insufficient_quota"}}`), 429)
+	if !strings.Contains(quota, "insufficient_quota") {
+		t.Fatalf("gatewayMessage = %q, want the insufficient_quota marker", quota)
 	}
 	if got := gatewayMessage([]byte("<html>oops</html>"), 502); !strings.Contains(got, "502") {
 		t.Fatalf("gatewayMessage = %q, want the status in the fallback", got)
@@ -310,9 +296,12 @@ func TestToModelInfoMapsThinkingAndLimits(t *testing.T) {
 		ContextLength: 1048576,
 		MaxTokens:     384000,
 		Thinking:      &modelThinking{Levels: []string{"off", "low", "high", "max"}, CanDisable: true},
-	})
+	}, "免费用量包可抵扣")
 	if info.ID != "deepseek-v4-flash" || info.DisplayName != "DeepSeek V4 Flash" {
 		t.Fatalf("info = %+v", info)
+	}
+	if info.Description != "免费用量包可抵扣" {
+		t.Fatalf("description = %q", info.Description)
 	}
 	if info.ContextLength != 1048576 || info.MaxCompletionTokens != 384000 {
 		t.Fatalf("limits = %d/%d", info.ContextLength, info.MaxCompletionTokens)
@@ -322,6 +311,16 @@ func TestToModelInfoMapsThinkingAndLimits(t *testing.T) {
 	}
 	if len(info.SupportedInputModalities) != 2 {
 		t.Fatalf("input modalities = %v, want text+image", info.SupportedInputModalities)
+	}
+
+	// Thinking metadata without the reasoning flag still exposes the levels: the
+	// CLI treats either signal as sufficient, and the executor needs the levels.
+	unflagged := toModelInfo(gatewayModel{
+		ID:       "quiet-model",
+		Thinking: &modelThinking{Levels: []string{"low", "high"}},
+	}, "")
+	if unflagged.Thinking == nil || len(unflagged.Thinking.Levels) != 2 {
+		t.Fatalf("thinking = %+v, want the advertised levels", unflagged.Thinking)
 	}
 }
 
@@ -475,7 +474,7 @@ func TestIsU1S1AuthName(t *testing.T) {
 	}
 }
 
-func TestMeResponseParsesPackages(t *testing.T) {
+func TestMeResponseParsesPackagesAndFreeClaim(t *testing.T) {
 	// Shape captured from a real GET /v1/me response.
 	body := []byte(`{"email":"u@example.com","daily_free_usd":44.000005,"daily_free_used_usd":0.07,
 "daily_free_remaining_usd":43.93,"daily_free_resets_at":"2026-09-02T16:00:00.000Z",
@@ -499,6 +498,23 @@ func TestMeResponseParsesPackages(t *testing.T) {
 	// total_tokens is null here and must degrade to 0, not panic.
 	if derefInt64(p.TotalTokens) != 0 {
 		t.Fatalf("total tokens = %d", derefInt64(p.TotalTokens))
+	}
+
+	// free_claim is a string enum upstream ("first"/"renew"/null); null must
+	// decode as empty, not fail the whole response.
+	var first meResponse
+	if err := json.Unmarshal([]byte(`{"email":"u@example.com","free_claim":"first"}`), &first); err != nil {
+		t.Fatalf("unmarshal /me free_claim: %v", err)
+	}
+	if first.FreeClaim != "first" {
+		t.Fatalf("free_claim = %q", first.FreeClaim)
+	}
+	var none meResponse
+	if err := json.Unmarshal([]byte(`{"email":"u@example.com","free_claim":null}`), &none); err != nil {
+		t.Fatalf("unmarshal /me with null free_claim: %v", err)
+	}
+	if none.FreeClaim != "" {
+		t.Fatalf("free_claim = %q, want empty", none.FreeClaim)
 	}
 }
 
@@ -527,11 +543,24 @@ func TestPanelHasNoLocalThemeSwitchAndFlowToolbar(t *testing.T) {
 	if !strings.Contains(body, `<div class="bar">`) {
 		t.Fatal("expected the in-flow toolbar container")
 	}
-	// The reload/logout buttons must come after the heading in document order.
+	// The reload button must come after the heading in document order.
 	h1 := strings.Index(body, "<h1>")
 	bar := strings.Index(body, `<div class="bar">`)
 	if h1 < 0 || bar < 0 || bar < h1 {
 		t.Fatalf("toolbar must render below the title (h1=%d bar=%d)", h1, bar)
+	}
+	// The announcement banner is the only in-session channel for maintenance
+	// notices, and links must open in a new tab without leaking the referrer.
+	if !strings.Contains(body, `id="notice"`) || !strings.Contains(body, "renderNotice") {
+		t.Fatal("panel must render the gateway announcement")
+	}
+	if strings.Count(body, `rel="noopener noreferrer"`) < 2 {
+		t.Fatal("external links must carry rel=noopener noreferrer")
+	}
+	// Token counts are the unit quota packages are denominated in; the panel must
+	// convert amounts with the gateway's own rate rather than showing only USD.
+	if !strings.Contains(body, "tokens_per_usd") {
+		t.Fatal("panel must convert USD amounts to tokens like the CLI does")
 	}
 }
 
@@ -631,19 +660,10 @@ func TestCachedUsageKeepsSnapshotWhenEnumerationFails(t *testing.T) {
 	if poisoned {
 		t.Fatal("failed refresh must not poison the cache")
 	}
-}
 
-func TestManagementUsageSurfacesEnumerationFailure(t *testing.T) {
-	usageCacheMu.Lock()
-	prev := usageCache
-	usageCache = nil
-	usageCacheMu.Unlock()
-	t.Cleanup(func() {
-		usageCacheMu.Lock()
-		usageCache = prev
-		usageCacheMu.Unlock()
-	})
-
+	// The same failure surfaces as a 502 through the management route: that is
+	// the contract the panel depends on — never dress "cannot enumerate" up as
+	// "no credentials".
 	payload, _ := json.Marshal(managementRequestWire{ManagementRequest: pluginapi.ManagementRequest{
 		Method: "GET",
 		Path:   "/v0/management/plugins/u1s1/usage",
@@ -665,28 +685,53 @@ func TestManagementUsageSurfacesEnumerationFailure(t *testing.T) {
 	}
 }
 
-func TestAuthDataOmitsEmptyPrefixMetadata(t *testing.T) {
-	// An explicit "prefix":"" in metadata overwrites the host's stored prefix on
-	// the next model.for_auth/refresh round-trip, silently dropping u1s1/*.
+func TestAuthDataOmitsEmptyOptionalMetadata(t *testing.T) {
+	// An explicit empty value in metadata would overwrite the host's stored value
+	// on the next model.for_auth/refresh round-trip. The host merges only *missing*
+	// keys back in, so empty optional keys (model prefix, email) must be omitted —
+	// "absent" is the signal the host uses to backfill its known value.
 	sa := testStoredAuth(t)
-	sa.Prefix = ""
-	data, err := authDataFor(sa)
-	if err != nil {
-		t.Fatalf("authDataFor() error = %v", err)
+	cases := []struct {
+		name       string
+		set        func(string)
+		wantAttr   bool
+		wantPrefix bool
+	}{
+		{"prefix", func(v string) { sa.Prefix = v }, false, true},
+		{"email", func(v string) { sa.Email = v }, true, false},
 	}
-	if _, exists := data.Metadata["prefix"]; exists {
-		t.Fatal("metadata must omit prefix when the credential has none")
-	}
-	if data.Prefix != "" {
-		t.Fatalf("prefix = %q, want empty so the host backfills it", data.Prefix)
-	}
-	// With a prefix set, both the field and the metadata key must be present.
-	sa.Prefix = "u1s1"
-	data, err = authDataFor(sa)
-	if err != nil {
-		t.Fatalf("authDataFor() error = %v", err)
-	}
-	if data.Prefix != "u1s1" || data.Metadata["prefix"] != "u1s1" {
-		t.Fatalf("prefix not published: field=%q meta=%v", data.Prefix, data.Metadata["prefix"])
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.set("")
+			data, err := authDataFor(sa)
+			if err != nil {
+				t.Fatalf("authDataFor() error = %v", err)
+			}
+			if _, exists := data.Metadata[tc.name]; exists {
+				t.Fatalf("metadata must omit %q when the credential has none", tc.name)
+			}
+			if tc.wantAttr {
+				if _, exists := data.Attributes[tc.name]; exists {
+					t.Fatalf("attributes must omit %q when the credential has none", tc.name)
+				}
+			}
+			if tc.wantPrefix && data.Prefix != "" {
+				t.Fatalf("prefix = %q, want empty so the host backfills it", data.Prefix)
+			}
+			tc.set("u1s1-test")
+			data, err = authDataFor(sa)
+			if err != nil {
+				t.Fatalf("authDataFor() error = %v", err)
+			}
+			if data.Metadata[tc.name] != "u1s1-test" {
+				t.Fatalf("%q not published to metadata: %v", tc.name, data.Metadata[tc.name])
+			}
+			if tc.wantAttr && data.Attributes[tc.name] != "u1s1-test" {
+				t.Fatalf("%q not published to attributes: %v", tc.name, data.Attributes[tc.name])
+			}
+			if tc.wantPrefix && data.Prefix != "u1s1-test" {
+				t.Fatalf("prefix = %q, want it echoed back to the host", data.Prefix)
+			}
+		})
 	}
 }

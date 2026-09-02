@@ -45,7 +45,7 @@ Go 的 `ecdsa.SignASN1` 输出 DER，会被网关直接拒绝。见 `dpop.go:sig
 | Capability | 方法 | 行为 |
 |---|---|---|
 | `auth_provider` | `auth.login.start` / `auth.login.poll` / `auth.parse` / `auth.refresh` | 浏览器设备登录；凭证由宿主落盘 `auth-dir` |
-| `model_provider` | `model.for_auth` | `GET /v1/models` 动态发现，5 分钟缓存 |
+| `model_provider` | `model.for_auth` | `GET /v1/models` 动态发现，5 分钟缓存；带价格/免费包说明（见 §5） |
 | `executor` | `executor.execute` / `executor.execute_stream` / `executor.count_tokens` | chat-completions 进出；流式经 `host.stream.emit`；token 数本地估算 |
 | `management_api` | `management.register` / `management.handle` | 额度面板 + JSON 路由 |
 
@@ -73,18 +73,18 @@ Go 的 `ecdsa.SignASN1` 输出 DER，会被网关直接拒绝。见 `dpop.go:sig
 | 文件 | 行数 | 职责 |
 |---|---|---|
 | `main.go` | 310 | cgo C ABI 骨架、方法分发、envelope、panic 屏障、`hostCall` |
-| `config.go` | 151 | 插件配置（base-url/client/client-version/user-agent）、注册声明 |
+| `config.go` | 153 | 插件配置（base-url/client/client-version/user-agent）、注册声明 |
 | `dpop.go` | 222 | JWK 解析与配对校验、P-256 密钥生成、P1363 签名、DPoP 头构造、私钥缓存 |
-| `gateway.go` | 638 | 凭证结构（含 Extra 保留）、指纹头、attestation 缓存、thinking profile 缓存、`/models` `/me` `/auth/device/*` |
+| `gateway.go` | 803 | 凭证结构（含 Extra 保留）、指纹头、attestation 缓存、thinking profile 缓存、公告缓存、错误尾巴、`/models` `/me` `/auth/device/*` |
 | `auth.go` | 391 | 登录会话、poll 状态机、`auth.parse`、refresh、AuthData 与 metadata 构造 |
-| `models.go` | 121 | 模型表拉取与 ModelInfo 映射、attestation 回写 |
+| `models.go` | 207 | 模型表拉取与 ModelInfo 映射（含价格/免费包说明）、attestation 回写 |
 | `thinking.go` | 164 | 模型后缀拆解、等级映射、按 request_format 写上游推理字段 |
 | `executor.go` | 442 | 请求体归一化、非流式/流式执行、SSE 扫描与 framing、token 估算 |
-| `upstream.go` | 427 | 宿主 HTTP 桥接（buffered + streaming）、stream emit/close、日志脱敏 |
-| `management.go` | 391 | 管理路由、额度快照缓存（双锁）、用量包标签 |
+| `upstream.go` | 435 | 宿主 HTTP 桥接（buffered + streaming）、stream emit/close、日志脱敏 |
+| `management.go` | 408 | 管理路由、额度快照缓存（双锁）、用量包标签 |
 | `host_auth.go` | 87 | `host.auth.list` / `host.auth.get` 封装 |
 | `panel.go` | 25 | 面板 HTML 嵌入与 base path 注入 |
-| `panel.html` | 332 | 额度面板（内嵌，不加载任何第三方脚本） |
+| `panel.html` | 368 | 额度面板（内嵌，不加载任何第三方脚本） |
 | `util.go` | 25 | UUID / 随机 hex |
 
 ---
@@ -93,9 +93,7 @@ Go 的 `ecdsa.SignASN1` 输出 DER，会被网关直接拒绝。见 `dpop.go:sig
 
 ### 构建
 
-```bash
-CGO_ENABLED=1 go build -buildmode=c-shared -trimpath -ldflags "-s -w" -o u1s1.so .
-```
+构建命令见 README「构建」。本文件只补充工具链细节：
 
 工具链：Go 1.27.0。产物 8.2MB，最高 glibc 符号需求 `GLIBC_2.34`。
 
@@ -103,35 +101,10 @@ CGO_ENABLED=1 go build -buildmode=c-shared -trimpath -ldflags "-s -w" -o u1s1.so
 本次构建机是 Debian 13（glibc 2.41）但实际符号需求只到 2.34，因此可用。换构建机时需
 重新用 `objdump -T u1s1.so | grep GLIBC_ | sort -uV | tail -1` 确认。
 
-### 安装
+### 安装与插件配置
 
-```bash
-cp u1s1.so <cpa>/plugins/linux/amd64/u1s1.so
-chmod 755 <cpa>/plugins/linux/amd64/u1s1.so
-```
-
-`config.yaml`：
-
-```yaml
-plugins:
-  enabled: true
-  dir: "plugins"
-  configs:
-    u1s1:
-      enabled: true
-      priority: 1
-```
-
-### 插件配置项
-
-| 键 | 默认值 | 说明 |
-|---|---|---|
-| `base-url` | `https://api.u1s1.io/v1` | 网关地址；auth 路由挂在去掉 `/v1` 的 origin 根 |
-| `client` | `terminal` | `x-u1s1-client` 头 |
-| `client-version` | `1.3.2` | `x-u1s1-version` 头，应与真实 CLI 版本一致 |
-| `user-agent` | `pi (linux ...; x64)` | 必须保持 `pi (...)` 形态 |
-
-也支持同名环境变量：`U1S1_BASE_URL`、`U1S1_CLIENT`、`U1S1_CLIENT_VERSION`、`U1S1_USER_AGENT`。
+安装步骤（`cp`、`chmod`、`config.yaml`）与插件配置项表、同名环境变量见 README「安装」「配置」，
+本文件不再重复。
 
 ---
 
@@ -139,21 +112,9 @@ plugins:
 
 ### 设备登录
 
-```bash
-curl -H "Authorization: Bearer $MGMT_KEY" \
-  "http://127.0.0.1:8317/v0/management/u1s1-auth-url"
-# -> {"status":"ok","url":"https://u1s1.io/login?device=...","state":"u1s1-..."}
-```
+命令行流程（发起设备登录、浏览器批准、轮询）见 README「登录」。流程细节：
 
-浏览器打开返回的 URL 批准设备，然后轮询：
-
-```bash
-curl -H "Authorization: Bearer $MGMT_KEY" \
-  "http://127.0.0.1:8317/v0/management/get-auth-status?state=<state>"
-# {"status":"wait"} -> {"status":"ok"}
-```
-
-流程细节：`auth.login.start` 生成 P-256 密钥对 → `POST {origin}/auth/device/start`
+`auth.login.start` 生成 P-256 密钥对 → `POST {origin}/auth/device/start`
 （带 `public_jwk`、设备名、客户端版本）→ 返回 `verify_url` + `poll_secret`；宿主按自己
 的节奏反复调 `auth.login.poll`，插件每次做一次 `POST {origin}/auth/device/poll`；
 `status: "ok"` 时构造 AuthData，宿主写盘。
@@ -258,27 +219,56 @@ codex/claude/antigravity/kimi/xai，第三方 provider 返回 `nil` → `shouldR
 
 ---
 
-## 5. 模型前缀
+## 5. 模型目录
 
-u1s1 的模型 id（`deepseek-v4-flash`、`glm-5.3-flash` 等）与其他 provider 撞名。设前缀：
+### 模型前缀
 
-```bash
-curl -X PATCH -H "Authorization: Bearer $MGMT_KEY" -H "Content-Type: application/json" \
-  -d '{"name":"u1s1-<email>.json","prefix":"u1s1"}' \
-  http://127.0.0.1:8317/v0/management/auth-files/fields
+u1s1 的模型 id（`deepseek-v4-flash`、`glm-5.3-flash` 等）与其他 provider 撞名。设前缀的命令与
+`force-model-prefix` 宿主级开关见 README「模型前缀」。插件侧的两个要点：
+
+- `auth.parse` 必须回显 `Prefix`，否则管理台设的前缀会在下次刷新时消失——宿主只对**原生解析**
+  的凭证文件自动回填该字段（根源见 §8「prefix 静默丢失」）。
+- 宿主的 `rewriteModelForAuth` 会在发往上游前剥掉**前缀**，但**不剥 thinking 后缀**——那一步
+  归插件自己，见下面的「thinking 后缀」。
+
+CPA 默认对设了前缀的凭证注册**两份**（裸 id + 带前缀 id），6 个模型变 12 条；
+`force-model-prefix: true` 只保留带前缀的形式，且只影响声明了 prefix 的凭证，其他 provider 不受影响。
+
+---
+
+### 模型说明：免费包覆盖与价格
+
+`/v1/models` 的每条记录带三个计费相关字段，插件把它们拼成 `ModelInfo.Description`
+（宿主原样转给客户端的 `/v1/models`）：
+
+| 字段 | 含义 |
+|---|---|
+| `free_package_eligible` | 免费用量包是否覆盖该模型。老网关没有这个字段 |
+| `price` | 当前单价（USD / 百万 token），`cache_read` 可为 null |
+| `price_bands` | 峰/闲价模型的两档价格 + `current` 指出此刻生效的那一档 |
+
+拼出来的形状与官方 CLI 模型选择器里那一行一致：
+
+```
+免费用量包可抵扣 · $0.22/$0.66 每百万 token（峰/闲价 · 当前闲时价）
+不走免费包 · 费用约为默认模型 3 倍 · $0.66/$1.98 每百万 token
 ```
 
-之后模型注册为 `u1s1/deepseek-v4-flash` 等。宿主的 `rewriteModelForAuth` 会在发往上游
-前剥掉**前缀**，但**不剥 thinking 后缀**——那一步归插件自己，见下面的「thinking 后缀」。
+倍数的基准是 `deepseek-v4-flash`（网关 `/v1/me` 里的 `daily_free_model`，也是 CLI 的默认
+模型），按 `(input + output) / 2` 的混合价比较，与 CLI 的 `deriveModelNote` 同一算法。
+不足 2 倍时只说"不走免费包"——四舍五入出来的"1 倍"是噪音。
 
-CPA 默认对设了前缀的凭证注册**两份**（裸 id + 带前缀 id），6 个模型变 12 条。只保留
-带前缀的形式需要宿主级开关：
+这一行不是装饰：u1s1 上"用哪个模型"直接决定这次请求免费还是扣余额，而 CPA 的模型列表
+除了 id 之外没有任何地方能表达它。`free_package_eligible` 缺失（老网关）时**不产生**覆盖
+结论——猜"覆盖"会让用户白烧余额，猜"不覆盖"会让人不敢用免费模型。
 
-```yaml
-force-model-prefix: true
-```
+价格用 `strconv.FormatFloat(v, 'f', -1, 64)` 打印，保持 `0.075` 而不是 `0.08`：
+`glm-5.3-flash` 的输入价正是三位小数。
 
-该开关只影响声明了 prefix 的凭证，其他 provider 不受影响。
+`reasoning` 标记也不再是 thinking 的前置条件——CLI 的 `apiModelToDef` 里
+`reasoning: m.reasoning || thinking !== undefined`，即网关下发了 `thinking.levels`
+就按推理模型处理。插件跟随这一契约（`gatewayModel.hasThinking()`），否则一个只给了
+levels 但 `reasoning: false` 的模型会丢掉全部思考等级。
 
 ---
 
@@ -320,16 +310,29 @@ CPA 管理台侧边栏出现 `u1s1` 菜单，指向：
 /v0/resource/plugins/u1s1/panel
 ```
 
-面板内容：今日免费额度（带进度条）、永久余额、本月成本、包内剩余 Token、额度重置时间，
+面板内容：今日免费额度（带进度条）、永久余额、本月已用、包内剩余 Token、额度重置时间，
 以及全部用量包的表格（中文名、剩余/额度进度条、今日已用、适用范围、到期时间）。数字格式
 与 `u1s1 usage` 的 万/亿 表达一致。
 
-JSON 路由（需管理密钥）：
+**单位口径跟 CLI 对齐**：金额卡片以 Token 为主、美元为副（按 `/v1/me` 下发的
+`tokens_per_usd` 折算）。用量包本身就是用 Token 计量的，只给美元让人无法对照包里还剩
+多少。老网关没有 `tokens_per_usd`，此时只有美元数字有意义，面板自动退回纯美元显示。
 
-| 方法 | 路径 | 用途 |
-|---|---|---|
-| GET | `/v0/management/plugins/u1s1/usage` | 全部 u1s1 凭证的额度；`?refresh=1` 跳过 30 秒缓存 |
-| POST | `/v0/management/plugins/u1s1/refresh` | 强制重读 `/v1/me` |
+**运维公告**：`/v1/models` 的 `announcement` 字段（网关后台下发，维护窗口/政策变更都走
+它）缓存在插件进程内，随 `usage` / `refresh` 响应下发，页首渲染。官方 CLI 也在会话内
+轮询它（`announcements-poll.js`，5 分钟一次），理由一样：否则一次计划内维护对用户而言
+就只是一串裸错误。公告在采集额度时顺便刷新（`refreshAnnouncementIfStale`，超过 5 分钟才
+拉一次 `/models`，只用第一条凭证）——聊天流量本来也会带回公告，但不能指望一个只跑
+固定模型的宿主恰好在维护窗口重拉过模型表。刷新失败不影响面板（旧公告强于加载失败）。
+公告文本转义后插入，url 先在 Go 侧校验为 http(s)（`isHTTPURL`）才会变成链接，避开
+`javascript:` 之类的 href。
+
+**免费包待领取**：`/v1/me` 的 `free_claim` 为 `"first"`（首月包）或 `"renew"`（年度包）
+时，账号行上出现指向官网 dashboard 的角标。只能跳转不能代领：领取接口在 `u1s1.io`
+（非网关）且要浏览器会话 Cookie 加两道人机验证，同 §9 的签到结论。
+
+JSON 路由（需管理密钥）：`GET /v0/management/plugins/u1s1/usage` 与
+`POST /v0/management/plugins/u1s1/refresh`（用途、参数见 README「额度面板」）。
 
 错误语义：`/v1/me` 逐凭证读失败时，对应账号在 `accounts` 里带 `error` 字段（面板显示"读取失败"）；
 而 `host.auth.list` 枚举本身失败时，若有旧快照则继续返回旧快照（不污染缓存、不刷新时间戳），
@@ -360,16 +363,8 @@ JSON 路由（需管理密钥）：
 
 ## 7. 测试
 
-```bash
-go test ./...                                    # 67 个离线单测
-go test -race ./...                              # 并发路径（attestation 刷新、usage 缓存）
-U1S1_LIVE_TEST=1 go test -run TestLiveGateway -v # 联网，会消耗额度
-```
-
-联网测试读取本机 `~/.u1s1/config.json`，依次验证 `/models`（含 attestation 下发）、
-`/me`、非流式聊天、流式聊天。
-
-覆盖的关键点：
+测试命令（离线单测、`-race`、`U1S1_LIVE_TEST=1` 联测）见 README「测试」，此处不再重复。
+当前离线测试：67 个测试函数、6 个子测试用例（`go test ./...` 全绿）。覆盖的关键点：
 
 - DPoP 证明的完整结构，且签名能用公钥验签通过；私钥标量不出现在 header 的 JWK 里
 - 公私钥不配对的 JWK 在解析期被拒
@@ -403,6 +398,13 @@ U1S1_LIVE_TEST=1 go test -run TestLiveGateway -v # 联网，会消耗额度
 - 同一凭证的并发 attestation 刷新合并为一次 `/models`（不再串行化聊天请求）
 - usage 采集期间 `snapshotTime()` 不被阻塞
 - `count_tokens` 返回正数估算且随提示长度增长（CJK 按字、拉丁按字节）
+- 模型说明：免费包覆盖与价格倍数的基准选取、不足 2 倍不说倍数、老网关缺
+  `free_package_eligible` 时不下覆盖结论、峰/闲价标出当前生效档、价格不被四舍五入
+- `thinking.levels` 存在但 `reasoning: false` 的模型仍暴露思考等级
+- 错误文本尾巴带 HTTP 状态码/错误代号/请求编号，`insufficient_quota` 归一
+- 网关公告：随 `/models` 捕获、被清空时从面板消失、非 http(s) URL 不变成链接、
+  经管理路由下发、缓存新鲜时不重拉 `/models`、过 TTL 后只重拉一次
+- `/me` 的 `free_claim` 为 null 时不报错且不渲染角标
 
 ---
 
@@ -427,7 +429,7 @@ U1S1_LIVE_TEST=1 go test -run TestLiveGateway -v # 联网，会消耗额度
 `unknown provider for model u1s1/deepseek-v4-flash`。
 
 修法：prefix 非空才写入该键，空值交给宿主回填。回归测试
-`TestAuthDataOmitsEmptyPrefixMetadata`。
+`TestAuthDataOmitsEmptyOptionalMetadata`。
 
 另一半原因：宿主只对**原生解析**的凭证文件自动回填 `Prefix` 字段，插件解析路径必须
 自己在 `AuthData.Prefix` 里回显。
@@ -542,6 +544,47 @@ u1s1/deepseek-v4-flash(high)  →  executor req.Model = "deepseek-v4-flash(high)
 - **`count_tokens` 恒返 0**：宿主把它当真值写进用量日志，客户端拿它做上下文预算，0 读
   起来就是"空对话"。改为本地估算（CJK 按字、拉丁按字节，向上取整，含每消息开销），
   并同时输出 `usage` 字段方便跨格式翻译器。
+- **`truncate()` 按字节切 UTF-8**：这个函数的输入全是网关的中文文本（错误信息、公告），
+  中文字符 3 字节，切到一半就把非法 UTF-8 写进了 JSON 响应和日志。现在回退到最近的
+  rune 边界（`utf8.RuneStart`）。
+
+---
+
+## 8.1 跟进 u1s1-cli 1.4.1
+
+对照 1.3.2 → 1.4.1 的 `dist/` 变更逐项核对，与插件相关的四处已跟进：
+
+**`client-version` → `1.4.1`**。指纹头必须跟真实发布版保持一致：网关的完整性拦截文案直接
+说"请升级并重新登录 u1s1"。实测 1.3.2 今天仍然 200（`x-u1s1-version` 不在当前拦截条件
+里），但押它永远不进拦截规则没有意义。其余指纹本版无变化：pi-coding-agent 0.84.4、
+内嵌 openai SDK 6.40.0、node v22.23.2，与 `stainlessPackageVersion` /
+`stainlessRuntimeVersion` 当前值一致。
+
+**错误文本带上尾巴**。新增的 `dist/error-humanize.js` 把模型调用错误从
+`429: {json}` 改写成"中文正文 + (HTTP 429 · code · 请求编号 …)"。尾巴的两个理由在它
+的注释里写得很死：`insufficient_quota` 是 pi 区分"不要重试"的分类关键字，
+`request_id` 是客服直查日志的唯一凭据。`gatewayMessage()` 因此不再只返回 `message`，
+还把状态码/代号/请求编号拼在末尾（`errorTail()`），并把 `type: insufficient_quota` 与
+`code: quota_exceeded` 归一到同一个词。
+
+**模型说明**。`free_package_eligible` 是 1.4.1 新增的网关字段，CLI 用它派生选择器里那一行
+"免费包可抵扣 / 不走免费包·约 N 倍"（同时删掉了内置目录的硬编码价格，价格权威全归
+网关）。插件把它变成 `ModelInfo.Description`，详见 §5。
+
+**面板向 `u1s1 usage` 新口径对齐**。CLI 把额度报告抽成 `usageReportLines()` 供会话内
+`/usage` 复用，同时：`login_checkin_bonus` 标签定为"打卡加成"（插件原作"打卡加量"）；
+"本月成本"改叫"本月已用"并以 Token 为主；不走免费包的模型从"仅可使用余额"改为
+"可用余额或全模型包"。面板同步了这三处。另外新增了公告横幅与 `free_claim` 角标（见 §6）。
+
+面板的 JS 不由 Go 单测执行，因此改完额外用 `node --check` 验语法，再把 `renderAccount` /
+`renderNotice` 提到最小 DOM 桩上跑一遍，确认两种网关（有/无 `tokens_per_usd`）下都
+不出 `undefined` / `NaN`。Go 单测只能盯住面板的结构不变式（数据不泄露、无自带主题
+开关、外链带 `rel=noopener noreferrer`、用 `tokens_per_usd` 换算）。
+
+没有跟进的部分：1.4.1 的其余变更（`/help` 会话内命令、空目录开场提示、`deploy --help`、
+子命令拼错纠正、登录限流原因透传）都是 CLI 自己的 TUI 交互，与网关契约无关。
+`/v1/models` 的 `price_bands`（峰/闲价）官方 CLI 自己也还没用上，只有网页价格表在读；
+插件直接把当前生效的那一档写进了说明。
 
 ---
 
@@ -583,6 +626,3 @@ C ABI + JSON envelope，SDK 只提供结构体定义。
 ## 11. 参考
 
 - CPA 插件文档：https://help.router-for.me/plugin/development
-- CPA 源码（对照 ABI 与 wire 结构）：`internal/pluginhost/`、`sdk/pluginapi/`、`sdk/pluginabi/`
-- 编写范本：`Sliverkiss/cpa-plugin` 的 workbuddy 插件（同为 auth + model + executor +
-  management 四能力的第三方 provider）

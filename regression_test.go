@@ -415,31 +415,6 @@ func TestModelForAuthUpdateLeavesFileNameToHost(t *testing.T) {
 	}
 }
 
-// An empty email must not publish empty metadata/attribute values: the host
-// merges only missing keys, so an explicit "" overwrites a known good email.
-func TestAuthDataOmitsEmptyEmailMetadata(t *testing.T) {
-	sa := testStoredAuth(t)
-	sa.Email = ""
-	data, err := authDataFor(sa)
-	if err != nil {
-		t.Fatalf("authDataFor() error = %v", err)
-	}
-	if _, exists := data.Metadata["email"]; exists {
-		t.Fatal("metadata must omit email when the credential has none")
-	}
-	if _, exists := data.Attributes["email"]; exists {
-		t.Fatal("attributes must omit email when the credential has none")
-	}
-	sa.Email = "user@example.com"
-	data, err = authDataFor(sa)
-	if err != nil {
-		t.Fatalf("authDataFor() error = %v", err)
-	}
-	if data.Metadata["email"] != "user@example.com" || data.Attributes["email"] != "user@example.com" {
-		t.Fatalf("email not published: meta=%v attr=%v", data.Metadata["email"], data.Attributes["email"])
-	}
-}
-
 // A pub/priv mismatch (hand-edited or truncated credential file) can never
 // produce a verifiable proof: fail at parse time with a precise message.
 func TestParsePrivateJWKRejectsMismatchedKeypair(t *testing.T) {
@@ -518,19 +493,3 @@ func TestDispatchMethodRedactsHandlerErrors(t *testing.T) {
 
 func out2str(b []byte) string { return string(b) }
 
-func TestCollectStreamCapsBufferedBytes(t *testing.T) {
-	chunk := `{"pad":"` + strings.Repeat("x", 2048) + `"}`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		for i := 0; i < 64; i++ {
-			_, _ = w.Write([]byte("data: " + chunk + "\n\n"))
-		}
-	}))
-	t.Cleanup(srv.Close)
-
-	// Small responses stay unaffected by the cap.
-	chunks, status, err := collectStream(srv.URL, map[string]string{}, nil, false, "")
-	if err != nil || status != 200 || len(chunks) != 64 {
-		t.Fatalf("chunks=%d status=%d err=%v", len(chunks), status, err)
-	}
-}

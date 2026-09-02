@@ -74,6 +74,12 @@ tbody tr:last-child td{border-bottom:none}
 .bar-track.crit>i{background:var(--err)}
 .note{font-size:11px;color:var(--mut);margin-top:3px}
 .err{color:var(--err)}
+/* Gateway announcement (maintenance windows, policy notices). Without it an
+   outage only shows up as failing requests. */
+.notice{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--warn);
+        border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:13px;white-space:pre-wrap}
+.notice a{color:var(--acc)}
+.tag.claim{color:var(--ok);border-color:var(--ok);background:transparent}
 .login{max-width:440px}
 .login input{width:100%;padding:9px 11px;border-radius:8px;border:1px solid var(--border);
              background:var(--input-bg);color:var(--fg);font-size:13px;margin:10px 0}
@@ -132,9 +138,9 @@ code{background:var(--surface-muted);padding:1px 5px;border-radius:4px;font-size
   <div class="sub">今日免费额度 · 永久余额 · 用量包明细（与 <code>u1s1 usage</code> 一致）</div>
   <div class="bar">
     <button id="reload">刷新</button>
-    <button id="logout" class="sec" hidden>退出</button>
     <span id="stamp" class="stamp"></span>
   </div>
+  <div id="notice"></div>
   <div id="root"><p class="mut">加载中…</p></div>
 </div>
 
@@ -204,6 +210,15 @@ function tokens(n) {
   }
   return Math.round(t).toLocaleString("en-US");
 }
+// The CLI leads with Token counts because that is the unit quota packages are
+// denominated in; USD is the conversion. tokens_per_usd is absent on older
+// gateways, and then only the dollar figure is meaningful.
+function moneyCell(a, amount) {
+  const tpu = Number(a.tokens_per_usd) || 0;
+  return tpu > 0
+    ? { value: tokens((Number(amount) || 0) * tpu) + " Token", note: usd(amount) }
+    : { value: usd(amount), note: "" };
+}
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 function localTime(s) {
   if (!s) return "—";
@@ -235,7 +250,7 @@ async function callAPI(path, opts = {}) {
 }
 
 function renderLogin(msg) {
-  document.getElementById("logout").hidden = true;
+  document.getElementById("notice").innerHTML = "";
   document.getElementById("root").innerHTML = `
     <div class="card login">
       <div style="font-weight:600;margin-bottom:4px">需要管理密钥</div>
@@ -261,6 +276,7 @@ function renderAccount(a) {
       <span class="tag off">读取失败</span></div>
       <div class="err">${esc(a.error)}</div></div>`;
   }
+
   const rows = (a.packages || []).map(p => {
     const cap = p.daily_tokens || p.total_tokens || 0;
     const capLabel = p.daily_tokens ? tokens(p.daily_tokens) + " / 天" : p.total_tokens ? tokens(p.total_tokens) : "—";
@@ -274,19 +290,30 @@ function renderAccount(a) {
   }).join("");
 
   const freePct = a.daily_free_usd > 0 ? a.daily_free_remaining_usd / a.daily_free_usd * 100 : 0;
+  const free = moneyCell(a, a.daily_free_remaining_usd);
+  const balance = moneyCell(a, a.remaining_usd);
+  const monthly = moneyCell(a, a.mtd_usd);
+  // A claimable free package is only claimable on the website: the claim endpoint
+  // needs a browser session plus two captchas, so link there instead of a button.
+  const claim = a.free_claim
+    ? `<a class="tag claim" href="https://u1s1.io/dashboard" target="_blank" rel="noopener noreferrer">${
+        a.free_claim === "first" ? "有免费用量包可领" : "免费用量包可续"}</a>`
+    : "";
   return `<div class="card">
     <div class="acct-head">
       <span class="acct-email">${esc(a.email || a.label || a.name)}</span>
       ${a.disabled ? '<span class="tag off">已停用</span>' : `<span class="tag">${esc(a.status || "active")}</span>`}
+      ${claim}
       <span class="mut">${esc(a.name)}</span>
     </div>
     <div class="grid">
-      <div class="kv"><div class="k">今日免费剩余</div><div class="v">${usd(a.daily_free_remaining_usd)}</div>
+      <div class="kv"><div class="k">今日免费剩余</div><div class="v">${free.value}</div>
         ${meter(a.daily_free_remaining_usd, a.daily_free_usd)}
         <div class="note">共 ${usd(a.daily_free_usd)} · ${freePct.toFixed(1)}%</div></div>
-      <div class="kv"><div class="k">永久余额</div><div class="v">${usd(a.remaining_usd)}</div>
-        ${a.bonus_balance_usd ? `<div class="note">含赠送 ${usd(a.bonus_balance_usd)}</div>` : ""}</div>
-      <div class="kv"><div class="k">本月成本</div><div class="v">${usd(a.mtd_usd)}</div></div>
+      <div class="kv"><div class="k">永久余额</div><div class="v">${balance.value}</div>
+        <div class="note">${[balance.note, a.bonus_balance_usd ? `含赠送 ${usd(a.bonus_balance_usd)}` : ""].filter(Boolean).join(" · ")}</div></div>
+      <div class="kv"><div class="k">本月已用</div><div class="v">${monthly.value}</div>
+        ${monthly.note ? `<div class="note">${monthly.note}</div>` : ""}</div>
       <div class="kv"><div class="k">包内剩余 Token</div><div class="v">${tokens(a.total_remaining_tokens)}</div>
         <div class="note">今日已用 ${tokens(a.total_used_today)}</div></div>
       <div class="kv"><div class="k">额度重置</div><div class="v sm">${localTime(a.daily_free_resets_at)}</div>
@@ -296,7 +323,21 @@ function renderAccount(a) {
         <th>用量包</th><th class="num">剩余</th><th class="num">额度</th>
         <th class="num">今日已用</th><th>到期</th>
       </tr></thead><tbody>${rows}</tbody></table>` : '<div class="mut">没有用量包。</div>'}
+    <div class="note">免费用量包覆盖 DeepSeek V4 Flash / Vision、GLM-5.3 Flash、Qwen3.8 Flash 和联网搜索；
+      其他模型（如 DeepSeek V4 Pro）不走免费包，可用余额或全模型包。
+      Token 数按默认模型单价折算，为约数；用更贵的模型时消耗更快。</div>
   </div>`;
+}
+
+// The announcement text comes from the gateway, so it is escaped; only the
+// plugin-validated http(s) URL becomes a link.
+function renderNotice(a) {
+  const box = document.getElementById("notice");
+  if (!a || !a.text) { box.innerHTML = ""; return; }
+  const link = a.url
+    ? `<div style="margin-top:6px"><a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.url)}</a></div>`
+    : "";
+  box.innerHTML = `<div class="notice">📢 ${esc(a.text)}${link}</div>`;
 }
 
 async function load(force) {
@@ -307,8 +348,8 @@ async function load(force) {
     const data = force
       ? await callAPI("/plugins/u1s1/refresh", { method: "POST" })
       : await callAPI("/plugins/u1s1/usage");
-    document.getElementById("logout").hidden = false;
     const accounts = data.accounts || [];
+    renderNotice(data.announcement);
     document.getElementById("stamp").textContent = data.fetched_at ? "更新于 " + localTime(data.fetched_at) : "";
     root.innerHTML = accounts.length
       ? accounts.map(renderAccount).join("")
@@ -320,11 +361,6 @@ async function load(force) {
 }
 
 document.getElementById("reload").onclick = () => load(true);
-document.getElementById("logout").onclick = () => {
-  clearSessionKey();
-  renderLogin("");
-  document.getElementById("stamp").textContent = "";
-};
 if (window.__u1s1ThemeSync) window.__u1s1ThemeSync();
 load();
 </script>
