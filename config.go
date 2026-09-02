@@ -101,8 +101,8 @@ func registrationResponse() registration {
 		Metadata: pluginapi.Metadata{
 			Name:             providerName,
 			Version:          pluginVersion,
-			Author:           "u1s1-cpa-plugin",
-			GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI",
+			Author:           "jizni",
+			GitHubRepository: "https://github.com/jizni/u1s1-cpa-plugin",
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "base-url", Type: pluginapi.ConfigFieldTypeString, Description: "u1s1 gateway base URL including /v1 (default https://api.u1s1.io/v1)."},
 				{Name: "client", Type: pluginapi.ConfigFieldTypeString, Description: "Value of the x-u1s1-client header (default terminal)."},

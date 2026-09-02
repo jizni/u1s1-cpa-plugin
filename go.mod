@@ -1,4 +1,4 @@
-module github.com/local/u1s1-cpa-plugin
+module github.com/jizni/u1s1-cpa-plugin
 
 go 1.26.0
 

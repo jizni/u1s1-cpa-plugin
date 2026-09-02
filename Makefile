@@ -10,9 +10,10 @@ PLUGIN   := $(DIST)/u1s1.so
 LDFLAGS  := -s -w
 
 # Release version, injected into the plugin's registration metadata via
-# -ldflags. Defaults to the closest git tag, so `make build` on a release
-# checkout produces a versioned plugin without extra arguments.
-VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# -ldflags. Defaults to the closest git tag with the leading v stripped (so
+# v0.2.0 -> 0.2.0, matching .github/workflows/release.yml), so `make build` on
+# a release checkout produces a versioned plugin without extra arguments.
+VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev)
 
 .PHONY: all build test vet race ci clean glibc-check
 
