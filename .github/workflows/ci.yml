@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # go.mod 里声明了 go 1.26，直接跟随 go.mod 的版本
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build (c-shared)
+        run: CGO_ENABLED=1 go build -buildmode=c-shared -trimpath -o u1s1-ci.so .
+
+      - name: Unit tests
+        run: go test ./...
+
+      - name: Race detector
+        run: CGO_ENABLED=1 go test -race ./...
+
+      - name: Vet
+        run: go vet ./...
