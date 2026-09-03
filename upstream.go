@@ -417,8 +417,8 @@ func isTokenChar(c byte) bool {
 }
 
 // truncate caps a string at max bytes without splitting a UTF-8 rune. The inputs
-// are gateway text (Chinese error messages, announcements), so a byte cut
-// mid-rune would put invalid UTF-8 into JSON responses and logs.
+// are gateway text (Chinese error messages), so a byte cut mid-rune would put
+// invalid UTF-8 into JSON responses and logs.
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s

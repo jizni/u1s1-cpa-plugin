@@ -9,10 +9,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      # go.mod 里声明了 go 1.26，直接跟随 go.mod 的版本
-      - uses: actions/setup-go@v5
+      # go.mod 声明 go 1.27，直接跟随 go.mod 的版本
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true

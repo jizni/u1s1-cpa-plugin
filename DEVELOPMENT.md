@@ -2,8 +2,8 @@
 
 CLIProxyAPI (CPA) 插件，把 u1s1 网关（`https://api.u1s1.io/v1`）接成原生 provider。
 
-- 开发日期：2026-09-01 ~ 2026-09-02
-- 目标宿主：CPA v7.2.145（Docker，`eceasy/cli-proxy-api:latest`）
+- 开发日期：2026-09-01 ~ 2026-09-03
+- 目标宿主：CPA v7.2.147（Docker，`eceasy/cli-proxy-api:latest`）
 - 状态：已部署运行，`registered: true` / `effective_enabled: true`
 
 ---
@@ -82,8 +82,8 @@ Go 的 `ecdsa.SignASN1` 输出 DER，会被网关直接拒绝。见 `dpop.go:sig
 
 | 文件 | 行数 | 职责 |
 |---|---|---|
-| `config.go` | 147 | 插件配置（base-url/client/client-version/user-agent）、注册声明 |
-| `state.go` | 76 | 全部包级可变状态集中处（每块标注读写者，为拆包留口子） |
+| `config.go` | 156 | 插件配置（base-url/client/client-version/user-agent）、注册声明 |
+| `state.go` | 67 | 全部包级可变状态集中处（每块标注读写者，为拆包留口子） |
 
 凭证与安全原语：
 
@@ -98,9 +98,8 @@ Go 的 `ecdsa.SignASN1` 输出 DER，会被网关直接拒绝。见 `dpop.go:sig
 
 | 文件 | 行数 | 职责 |
 |---|---|---|
-| `gateway_models.go` | 114 | `/v1/models` 端点与响应 wire 类型 |
+| `gateway_models.go` | 111 | `/v1/models` 端点与响应 wire 类型 |
 | `profiles.go` | 81 | 每模型 thinking 契约缓存（由 `/models` 喂养，executor 读取） |
-| `announcement.go` | 83 | 网关公告缓存（TTL 刷新、URL 校验） |
 | `gateway_me.go` | 64 | `/v1/me` 端点与额度 wire 类型 |
 | `gateway_device.go` | 98 | `/auth/device/start` / `poll` 端点 |
 | `gateway_errors.go` | 57 | 上游错误解析与错误尾巴（HTTP 状态 · code · 请求编号） |
@@ -114,7 +113,7 @@ Go 的 `ecdsa.SignASN1` 输出 DER，会被网关直接拒绝。见 `dpop.go:sig
 | `thinking.go` | 164 | 模型后缀拆解、等级映射、按 request_format 写上游推理字段 |
 | `executor.go` | 442 | 请求体归一化、非流式/流式执行、SSE 扫描与 framing、token 估算 |
 | `upstream.go` | 431 | 宿主 HTTP 桥接（buffered + streaming）、stream emit/close、日志脱敏 |
-| `management.go` | 391 | 管理路由、额度快照缓存（双锁）、用量包标签 |
+| `management.go` | 400 | 管理路由、额度快照缓存（双锁）、用量包标签 |
 | `host_auth.go` | 87 | `host.auth.list` / `host.auth.get` 封装 |
 
 面板与工具：
@@ -122,7 +121,7 @@ Go 的 `ecdsa.SignASN1` 输出 DER，会被网关直接拒绝。见 `dpop.go:sig
 | 文件 | 行数 | 职责 |
 |---|---|---|
 | `panel.go` | 25 | 面板 HTML 嵌入与 base path 注入 |
-| `panel.html` | 368 | 额度面板（内嵌，不加载任何第三方脚本） |
+| `panel.html` | 365 | 额度面板（内嵌，不加载任何第三方脚本） |
 | `util.go` | 25 | UUID / 随机 hex |
 
 ---
@@ -133,7 +132,7 @@ Go 的 `ecdsa.SignASN1` 输出 DER，会被网关直接拒绝。见 `dpop.go:sig
 
 构建命令见 README「构建」。本文件只补充工具链细节：
 
-工具链：Go 1.27.0。产物 8.2MB，最高 glibc 符号需求 `GLIBC_2.34`。
+工具链：Go 1.27.0。产物 7.9MB，最高 glibc 符号需求 `GLIBC_2.34`。
 
 **glibc 兼容性**：必须在不高于容器 glibc 的环境构建。官方镜像是 Debian 12（glibc 2.36），
 本次构建机是 Debian 13（glibc 2.41）但实际符号需求只到 2.34，因此可用。换构建机时需
@@ -155,13 +154,13 @@ Go 的 `ecdsa.SignASN1` 输出 DER，会被网关直接拒绝。见 `dpop.go:sig
   并在发布前强制校验 glibc 符号需求 ≤ 2.36（容器是 Debian 12 / glibc 2.36）。
 - 发布产物：`u1s1.so` + `u1s1.so.sha256`，挂在 GitHub Release 资产上；用 `vX.Y.Z` tag 发版。
 
-### 插件替换需重启容器
+### 插件替换需重启容器（除非用带版本号的文件名）
 
 CPA 的插件宿主（`pluginhost`）只在**插件文件路径变化**时才重建插件：
 `ApplyConfig` 用 `cleanPluginPath(loaded.path) != cleanPluginPath(file.Path)` 判断，
 覆盖同一个 `u1s1.so` 文件 + `touch config.yaml` 不会触发重载，宿主仍持有旧库的 inode。
 
-因此**替换插件（哪怕只是改配置）后必须重启容器**才能让新版本生效：
+因此覆盖式替换（哪怕只是改配置）后必须重启容器：
 
 ```bash
 cp dist/u1s1.so <cpa>/plugins/linux/amd64/u1s1.so && docker restart cli-proxy-api
@@ -170,6 +169,22 @@ cp dist/u1s1.so <cpa>/plugins/linux/amd64/u1s1.so && docker restart cli-proxy-ap
 重启后核对日志确认新版本已加载：模型重新注册（`Registered new model u1s1/...`）、
 宿主调用 `auth.refresh`（`refreshed u1s1, ...`）。管理面板的 `/v0/resource/plugins/u1s1/panel`
 返回 200 说明管理路由已注册。
+
+宿主自 v7.2.147 支持不重启热替换，前提是**换文件名**：文件名写成 `u1s1-v<版本>.so`
+（`pluginFileFromPath` 按 `-v` 拆出版本号，`u1s1-v0.2.2.so` → id `u1s1` / version `0.2.2`），
+放进同一目录后触发一次配置重载（改 `config.yaml` 或管理台 `PATCH /v0/management/plugins/u1s1/enabled`）。
+路径变了，`ApplyConfig` 就会走替换分支：先对旧库调 `plugin.quiesce`（本插件没实现这个方法，
+宿主按 `unknown_method` 当"不支持"记 debug 日志放过），加载新库、注册成功后才把旧库挪进
+`retired`，失败则回滚到旧库。多版本共存时选最高版本号，且带版本号的文件优先于不带的
+（`pluginFilePreferred`）。
+
+两个坑：**旧文件会被删**——每个进程的第一次成功 `ApplyConfig` 会跑一次
+`cleanupUnselectedPluginFiles`，把同 id 但未被选中的 `.so` 直接 `os.Remove`，所以目录里一旦
+有了 `u1s1-v*.so`，下次重启就会把无版本号的 `u1s1.so` 删掉（`.bak-*` 后缀不是 `.so`，不受影响）。
+**旧库不会被卸载**——`plugin.quiesce` 只是"别接新活"的礼貌通知，`dlclose` 只在 `UnloadPlugin` /
+`ShutdownAll` 里做，热替换后旧 `.so` 仍映射在进程里直到下次重启。
+
+这条路径本插件尚未实测，当前部署仍是无版本号的 `u1s1.so` + 重启。
 
 ---
 
@@ -383,14 +398,15 @@ CPA 管理台侧边栏出现 `u1s1` 菜单，指向：
 `tokens_per_usd` 折算）。用量包本身就是用 Token 计量的，只给美元让人无法对照包里还剩
 多少。老网关没有 `tokens_per_usd`，此时只有美元数字有意义，面板自动退回纯美元显示。
 
-**运维公告**：`/v1/models` 的 `announcement` 字段（网关后台下发，维护窗口/政策变更都走
-它）缓存在插件进程内，随 `usage` / `refresh` 响应下发，页首渲染。官方 CLI 也在会话内
-轮询它（`announcements-poll.js`，5 分钟一次），理由一样：否则一次计划内维护对用户而言
-就只是一串裸错误。公告在采集额度时顺便刷新（`refreshAnnouncementIfStale`，超过 5 分钟才
-拉一次 `/models`，只用第一条凭证）——聊天流量本来也会带回公告，但不能指望一个只跑
-固定模型的宿主恰好在维护窗口重拉过模型表。刷新失败不影响面板（旧公告强于加载失败）。
-公告文本转义后插入，url 先在 Go 侧校验为 http(s)（`isHTTPURL`）才会变成链接，避开
-`javascript:` 之类的 href。
+**刷新反馈**：`刷新` 按钮在飞行中改文案并禁用，状态行（`aria-live="polite"`）先显示
+"正在读取 /v1/me…"、完成后换成快照时间。额度变化慢且网关计数有延迟，一次成功的强制
+刷新经常前后一模一样，没有这层反馈就无法判断按钮到底有没有生效。`load()` 另带重入锁：
+禁用按钮盖不住密钥表单的 Enter 和首屏加载。
+
+**不展示网关公告**：`/v1/models` 带回的 `announcement`（维护窗口、政策变更）曾在页首
+渲染过一版，现已整条链路移除：面板是这份缓存唯一的消费方，留缓存就是留一堆没人读的
+状态。附带好处是采集额度不再搭一次 `/v1/models`（原来的 `refreshAnnouncementIfStale`
+要拉一次模型表才能刷新公告）。维护公告仍可以从官方 CLI 或官网看到。
 
 **免费包待领取**：`/v1/me` 的 `free_claim` 为 `"first"`（首月包）或 `"renew"`（年度包）
 时，账号行上出现指向官网 dashboard 的角标。只能跳转不能代领：领取接口在 `u1s1.io`
@@ -406,6 +422,10 @@ JSON 路由（需管理密钥）：`GET /v0/management/plugins/u1s1/usage` 与
 锁的划分：`usageCacheMu` 只护快照本身，`usageCollectMu` 只负责把并发采集合并成一次。
 两者分开是因为采集是 N 个 `/me` 往返：若把缓存锁持有到采集结束，一个慢账号就能把所有
 缓存命中和 `snapshotTime()` 一起阻住。
+
+缓存新鲜度：普通加载接受 30 秒 TTL 内的快照；强制刷新（`POST /refresh` 或 `?refresh=1`）
+不看 TTL，只接受采集时间晚于本次请求发起时刻的快照——即与本次调用真正重叠的采集，
+并发刷新仍然合并成一趟 `/me`。这一条是为了修正面板刷新按钮无效的 bug（见 §8）。
 
 ### 安全边界
 
@@ -429,7 +449,7 @@ JSON 路由（需管理密钥）：`GET /v0/management/plugins/u1s1/usage` 与
 ## 7. 测试
 
 测试命令（离线单测、`-race`、`U1S1_LIVE_TEST=1` 联测）见 README「测试」，此处不再重复。
-当前离线测试：67 个测试函数、6 个子测试用例（`go test ./...` 全绿）。覆盖的关键点：
+当前离线测试：69 个测试函数、6 个子测试用例（`go test ./...` 全绿）。覆盖的关键点：
 
 - DPoP 证明的完整结构，且签名能用公钥验签通过；私钥标量不出现在 header 的 JWK 里
 - 公私钥不配对的 JWK 在解析期被拒
@@ -467,8 +487,8 @@ JSON 路由（需管理密钥）：`GET /v0/management/plugins/u1s1/usage` 与
   `free_package_eligible` 时不下覆盖结论、峰/闲价标出当前生效档、价格不被四舍五入
 - `thinking.levels` 存在但 `reasoning: false` 的模型仍暴露思考等级
 - 错误文本尾巴带 HTTP 状态码/错误代号/请求编号，`insufficient_quota` 归一
-- 网关公告：随 `/models` 捕获、被清空时从面板消失、非 http(s) URL 不变成链接、
-  经管理路由下发、缓存新鲜时不重拉 `/models`、过 TTL 后只重拉一次
+- 强制刷新（`POST /refresh`）不接受早于本次请求的快照，但可复用与它重叠的采集（并发合并）
+- 面板刷新中的反馈：按钮文案、`aria-live`、`load()` 重入锁
 - `/me` 的 `free_claim` 为 null 时不报错且不渲染角标
 
 ---
@@ -598,6 +618,25 @@ u1s1/deepseek-v4-flash(high)  →  executor req.Model = "deepseek-v4-flash(high)
 
 修法：空实现 + 注释说明为何不能动。
 
+### 刷新按钮点了没反应
+
+`POST /refresh` 稳定返回 200，但面板上的数字和“更新于”时间戳都不动。日志把病灶指得很清楚：
+GET `usage` 的冷路径 ~1s（N 个 `/me` 往返），而 `refresh` 只花 67ms——根本没出网。
+
+`cachedUsage()` 拿到 `usageCollectMu` 之后要复查一次缓存（等锁期间可能已有别人采集完），
+原来这次复查写死 `freshUsageSnapshot(false)`，理由是“调用方要新数据，不是要 N 趟采集”。
+但 `false` 意味着“TTL 内的快照就够”，于是 30 秒内的强制刷新一律被自己的旧快照满足。
+而面板的常态恰好就是这个窗口：首屏 `usage` 刚把缓存填满，用户几秒后才点到刷新。
+
+修法：`freshUsageSnapshot(force, requestedAt)` 把“够新”的判据换成时间点而不是布尔量——
+强制调用方只接受**采集时间晚于本次请求发起时刻**的快照。这样既保住了并发合并（真正与
+本次重叠的采集仍可复用，不会退化成 N 趟 `/me`），又不可能把调用方要求替换的那份快照
+还给它。TTL 只对普通加载有意义，强制路径不再看它。
+
+另一半是 UI：额度本来就变得慢，网关的计数还有延迟，所以一次成功的强制刷新经常前后
+一模一样。数字不变时“按钮有没有生效”无从判断，因此按钮在飞行中改文案并禁用，状态行
+用 `aria-live` 播报，`load()` 自带重入锁（禁用按钮盖不住密钥表单的 Enter 和首屏加载）。
+
 ### 次要修正
 
 - **attestation 刷新串行化**：`entry.mu` 原本跨整个 `/models` 往返持有，同一凭证的并发
@@ -609,7 +648,7 @@ u1s1/deepseek-v4-flash(high)  →  executor req.Model = "deepseek-v4-flash(high)
 - **`count_tokens` 恒返 0**：宿主把它当真值写进用量日志，客户端拿它做上下文预算，0 读
   起来就是"空对话"。改为本地估算（CJK 按字、拉丁按字节，向上取整，含每消息开销），
   并同时输出 `usage` 字段方便跨格式翻译器。
-- **`truncate()` 按字节切 UTF-8**：这个函数的输入全是网关的中文文本（错误信息、公告），
+- **`truncate()` 按字节切 UTF-8**：这个函数的输入全是网关的中文文本（错误信息），
   中文字符 3 字节，切到一半就把非法 UTF-8 写进了 JSON 响应和日志。现在回退到最近的
   rune 边界（`utf8.RuneStart`）。
 
@@ -639,10 +678,10 @@ u1s1/deepseek-v4-flash(high)  →  executor req.Model = "deepseek-v4-flash(high)
 **面板向 `u1s1 usage` 新口径对齐**。CLI 把额度报告抽成 `usageReportLines()` 供会话内
 `/usage` 复用，同时：`login_checkin_bonus` 标签定为"打卡加成"（插件原作"打卡加量"）；
 "本月成本"改叫"本月已用"并以 Token 为主；不走免费包的模型从"仅可使用余额"改为
-"可用余额或全模型包"。面板同步了这三处。另外新增了公告横幅与 `free_claim` 角标（见 §6）。
+"可用余额或全模型包"。面板同步了这三处。另外新增了 `free_claim` 角标（见 §6）。
 
-面板的 JS 不由 Go 单测执行，因此改完额外用 `node --check` 验语法，再把 `renderAccount` /
-`renderNotice` 提到最小 DOM 桩上跑一遍，确认两种网关（有/无 `tokens_per_usd`）下都
+面板的 JS 不由 Go 单测执行，因此改完额外用 `node --check` 验语法，再把 `renderAccount`
+提到最小 DOM 桩上跑一遍，确认两种网关（有/无 `tokens_per_usd`）下都
 不出 `undefined` / `NaN`。Go 单测只能盯住面板的结构不变式（数据不泄露、无自带主题
 开关、外链带 `rel=noopener noreferrer`、用 `tokens_per_usd` 换算）。
 
@@ -679,12 +718,18 @@ Turnstile token（action 绑定为 `claim_login_checkin`），Turnstile 处于�
 ## 10. 依赖
 
 ```
-github.com/router-for-me/CLIProxyAPI/v7 v7.2.30   # pluginapi / pluginabi 类型定义
+github.com/router-for-me/CLIProxyAPI/v7 v7.2.147  # pluginapi / pluginabi 类型定义
 gopkg.in/yaml.v3 v3.0.1                            # 解析 plugins.configs.u1s1
 ```
 
-SDK 版本（v7.2.30）低于运行时宿主（v7.2.145）不影响兼容性：插件与宿主之间走稳定
-C ABI + JSON envelope，SDK 只提供结构体定义。
+SDK 版本与运行时宿主（v7.2.147）对齐。插件与宿主之间走稳定 C ABI + JSON envelope，
+SDK 只提供结构体定义，因此版本偏离本身不会破兼容（`ABIVersion` 仍为 1）；对齐的目的
+是能读到宿主当前的契约声明（新方法名、新能力位、`SchemaVersion` 的含义）。
+
+插件在 `plugin.register` 里回 `schema_version: 1`，而 v7.2.147 的宿主已经声明到 4。这是
+有意保留的：2、3、4 分别引入请求生命周期回调、流式 chunk 不再携带 request body、
+WebSocket 响应观察，三项能力本插件都不声明，升版只会把契约变得更严而不多任何收益。
+`resp.SchemaVersion > pluginabi.SchemaVersion` 才是宿主拒载的条件，声明低版本安全。
 
 ---
 

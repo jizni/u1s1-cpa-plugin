@@ -90,8 +90,9 @@ func managementRegistration() managementRegistrationResponse {
 // quota snapshot cache
 // ---------------------------------------------------------------------------
 
-// usageCacheTTL keeps panel refreshes from spamming /v1/me. The gateway updates
-// package counters with some lag anyway, so a short cache costs no accuracy.
+// usageCacheTTL keeps the panel's automatic loads from spamming /v1/me. The
+// gateway updates package counters with some lag anyway, so a short cache costs
+// no accuracy. An explicit refresh ignores the TTL — see freshUsageSnapshot.
 const usageCacheTTL = 30 * time.Second
 
 type usageSnapshot struct {
@@ -192,7 +193,6 @@ func collectUsage(callbackID string) ([]accountUsage, error) {
 		return nil, fmt.Errorf("host.auth.list: %w", err)
 	}
 	out := make([]accountUsage, 0, len(entries))
-	announcementRefreshed := false
 	for _, entry := range entries {
 		item := accountUsage{
 			AuthIndex: entry.AuthIndex,
@@ -209,12 +209,6 @@ func collectUsage(callbackID string) ([]accountUsage, error) {
 		}
 		item.Email = sa.Email
 		attestation := attestationFor(entry.AuthIndex, sa, callbackID)
-		// One credential is enough to read the shared notice, and this pass is
-		// already the panel's slow path.
-		if !announcementRefreshed {
-			refreshAnnouncementIfStale(sa, attestation, callbackID)
-			announcementRefreshed = true
-		}
 		me, errMe := fetchMe(sa, attestation, callbackID)
 		if errMe != nil {
 			item.Error = redactSecrets(errMe.Error())
@@ -260,7 +254,10 @@ func collectUsage(callbackID string) ([]accountUsage, error) {
 }
 
 func cachedUsage(callbackID string, force bool) ([]accountUsage, error) {
-	if accounts, ok := freshUsageSnapshot(force); ok {
+	// requestedAt is the freshness bar for a forced refresh: only a snapshot
+	// collected after this instant can satisfy it.
+	requestedAt := time.Now()
+	if accounts, ok := freshUsageSnapshot(force, requestedAt); ok {
 		return accounts, nil
 	}
 
@@ -270,9 +267,13 @@ func cachedUsage(callbackID string, force bool) ([]accountUsage, error) {
 	usageCollectMu.Lock()
 	defer usageCollectMu.Unlock()
 
-	// A concurrent collection may have finished while we waited for the lock.
-	// Re-check even when force is set: the caller wants fresh data, not N passes.
-	if accounts, ok := freshUsageSnapshot(false); ok {
+	// A concurrent collection may have finished while we waited for the lock, so
+	// re-check before starting another pass. The check must carry force through:
+	// asking with force=false here made a forced refresh hand back the very
+	// snapshot it was told to replace whenever one existed inside the TTL, which
+	// is the panel's normal state (its initial load fills the cache moments
+	// before the user reaches the 刷新 button).
+	if accounts, ok := freshUsageSnapshot(force, requestedAt); ok {
 		return accounts, nil
 	}
 
@@ -295,16 +296,26 @@ func cachedUsage(callbackID string, force bool) ([]accountUsage, error) {
 	return accounts, nil
 }
 
-// freshUsageSnapshot returns the cached accounts when they are still inside the
-// TTL. force skips the TTL check but still allows the caller to reuse a snapshot
-// produced by a collection that overlapped this call.
-func freshUsageSnapshot(force bool) ([]accountUsage, bool) {
-	if force {
-		return nil, false
-	}
+// freshUsageSnapshot returns the cached accounts when they satisfy the caller.
+//
+// A plain caller accepts any snapshot inside usageCacheTTL. A forced caller (the
+// panel's 刷新 button) accepts only a snapshot collected after requestedAt: one
+// produced by a collection that overlapped this call, so concurrent refreshes
+// still collapse into a single /v1/me pass instead of N. The TTL says nothing
+// about the freshness a forced caller asked for, so it is not consulted there.
+func freshUsageSnapshot(force bool, requestedAt time.Time) ([]accountUsage, bool) {
 	usageCacheMu.Lock()
 	defer usageCacheMu.Unlock()
-	if usageCache != nil && time.Since(usageCache.fetchedAt) < usageCacheTTL {
+	if usageCache == nil {
+		return nil, false
+	}
+	if force {
+		if usageCache.fetchedAt.After(requestedAt) {
+			return usageCache.accounts, true
+		}
+		return nil, false
+	}
+	if time.Since(usageCache.fetchedAt) < usageCacheTTL {
 		return usageCache.accounts, true
 	}
 	return nil, false
@@ -342,10 +353,9 @@ func handleManagement(raw []byte) ([]byte, error) {
 			}))
 		}
 		return okEnvelope(jsonResponse(http.StatusOK, map[string]any{
-			"accounts":     accounts,
-			"announcement": currentAnnouncement(),
-			"fetched_at":   snapshotTime(),
-			"cache_ttl_s":  int(usageCacheTTL.Seconds()),
+			"accounts":    accounts,
+			"fetched_at":  snapshotTime(),
+			"cache_ttl_s": int(usageCacheTTL.Seconds()),
 		}))
 
 	case req.Method == http.MethodPost && path == base+"/refresh":
@@ -356,10 +366,9 @@ func handleManagement(raw []byte) ([]byte, error) {
 			}))
 		}
 		return okEnvelope(jsonResponse(http.StatusOK, map[string]any{
-			"status":       "ok",
-			"accounts":     accounts,
-			"announcement": currentAnnouncement(),
-			"fetched_at":   snapshotTime(),
+			"status":     "ok",
+			"accounts":   accounts,
+			"fetched_at": snapshotTime(),
 		}))
 
 	default:

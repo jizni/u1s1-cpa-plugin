@@ -175,20 +175,20 @@ false` 的模型，`(off)` 会落到最低强度而不是被拒绝。不带后�
 
 页面展示与 `u1s1 usage` 相同的数据：每日免费额度、永久余额、当月累计开销，以及每个
 额度包的范围和到期时间。数额以 Token 为主、美元为辅（按网关下发的 `tokens_per_usd`
-折算）。网关下发的运维公告显示在页首；有待领取的免费用量包时，账号行上出现指向官网
-dashboard 的角标（领取需要浏览器会话和两道人机验证，插件无法代劳）。
+折算）。有待领取的免费用量包时，账号行上出现指向官网 dashboard 的角标（领取需要浏览器
+会话和两道人机验证，插件无法代劳）。
 
 JSON 路由（需要管理密钥）：
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | GET | `/v0/management/plugins/u1s1/usage` | 所有 u1s1 凭证的额度；加 `?refresh=1` 跳过 30 秒缓存。 |
-| POST | `/v0/management/plugins/u1s1/refresh` | 强制重新读取 `/v1/me`。 |
+| POST | `/v0/management/plugins/u1s1/refresh` | 强制重新读取 `/v1/me`，忽略缓存。 |
 
 资源页面本身不做管理鉴权（宿主契约），所以 HTML 里**不带**任何额度或凭证数据。它从
 `?key=`、`sessionStorage` 或控制台同源 `localStorage` 取管理密钥，再调用带鉴权的路由；
 凭证 JSON 只在插件进程内通过 `host.auth.list` / `host.auth.get` 读取，永远不会到达
-浏览器。面板的缓存与锁划分、公告刷新策略见 DEVELOPMENT.md §6。
+浏览器。面板的缓存与锁划分见 DEVELOPMENT.md §6。
 
 ## 测试
 

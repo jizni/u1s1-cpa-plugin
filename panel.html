@@ -74,11 +74,6 @@ tbody tr:last-child td{border-bottom:none}
 .bar-track.crit>i{background:var(--err)}
 .note{font-size:11px;color:var(--mut);margin-top:3px}
 .err{color:var(--err)}
-/* Gateway announcement (maintenance windows, policy notices). Without it an
-   outage only shows up as failing requests. */
-.notice{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--warn);
-        border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:13px;white-space:pre-wrap}
-.notice a{color:var(--acc)}
 .tag.claim{color:var(--ok);border-color:var(--ok);background:transparent}
 .login{max-width:440px}
 .login input{width:100%;padding:9px 11px;border-radius:8px;border:1px solid var(--border);
@@ -138,9 +133,8 @@ code{background:var(--surface-muted);padding:1px 5px;border-radius:4px;font-size
   <div class="sub">今日免费额度 · 永久余额 · 用量包明细（与 <code>u1s1 usage</code> 一致）</div>
   <div class="bar">
     <button id="reload">刷新</button>
-    <span id="stamp" class="stamp"></span>
+    <span id="stamp" class="stamp" role="status" aria-live="polite"></span>
   </div>
-  <div id="notice"></div>
   <div id="root"><p class="mut">加载中…</p></div>
 </div>
 
@@ -250,7 +244,6 @@ async function callAPI(path, opts = {}) {
 }
 
 function renderLogin(msg) {
-  document.getElementById("notice").innerHTML = "";
   document.getElementById("root").innerHTML = `
     <div class="card login">
       <div style="font-weight:600;margin-bottom:4px">需要管理密钥</div>
@@ -329,35 +322,39 @@ function renderAccount(a) {
   </div>`;
 }
 
-// The announcement text comes from the gateway, so it is escaped; only the
-// plugin-validated http(s) URL becomes a link.
-function renderNotice(a) {
-  const box = document.getElementById("notice");
-  if (!a || !a.text) { box.innerHTML = ""; return; }
-  const link = a.url
-    ? `<div style="margin-top:6px"><a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.url)}</a></div>`
-    : "";
-  box.innerHTML = `<div class="notice">📢 ${esc(a.text)}${link}</div>`;
-}
+let loading = false;
 
 async function load(force) {
+  // Guard re-entry: the button is disabled below, but Enter in the key form and
+  // the initial load can both reach here.
+  if (loading) return;
+  loading = true;
   const root = document.getElementById("root");
   const btn = document.getElementById("reload");
+  const label = btn.textContent;
+  // A forced refresh that finds unchanged quota numbers is indistinguishable
+  // from a dead button, so say out loud that the click was taken.
+  btn.textContent = "刷新中…";
   btn.disabled = true;
+  if (force) document.getElementById("stamp").textContent = "正在读取 /v1/me…";
   try {
     const data = force
       ? await callAPI("/plugins/u1s1/refresh", { method: "POST" })
       : await callAPI("/plugins/u1s1/usage");
     const accounts = data.accounts || [];
-    renderNotice(data.announcement);
     document.getElementById("stamp").textContent = data.fetched_at ? "更新于 " + localTime(data.fetched_at) : "";
     root.innerHTML = accounts.length
       ? accounts.map(renderAccount).join("")
       : '<div class="card"><div class="mut">没有 u1s1 凭证。用管理端 <code>/v0/management/u1s1-auth-url</code> 发起设备登录，或把 <code>~/.u1s1/config.json</code> 放进 auth-dir。</div></div>';
   } catch (e) {
+    document.getElementById("stamp").textContent = "";
     if (e.needKey) renderLogin(e.message === "missing management key" ? "" : e.message);
     else root.innerHTML = `<div class="card err">加载失败：${esc(e.message)}</div>`;
-  } finally { btn.disabled = false; }
+  } finally {
+    loading = false;
+    btn.disabled = false;
+    btn.textContent = label;
+  }
 }
 
 document.getElementById("reload").onclick = () => load(true);

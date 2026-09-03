@@ -549,18 +549,39 @@ func TestPanelHasNoLocalThemeSwitchAndFlowToolbar(t *testing.T) {
 	if h1 < 0 || bar < 0 || bar < h1 {
 		t.Fatalf("toolbar must render below the title (h1=%d bar=%d)", h1, bar)
 	}
-	// The announcement banner is the only in-session channel for maintenance
-	// notices, and links must open in a new tab without leaking the referrer.
-	if !strings.Contains(body, `id="notice"`) || !strings.Contains(body, "renderNotice") {
-		t.Fatal("panel must render the gateway announcement")
+	// The panel shows quota only; the gateway's operator notice was dropped, so
+	// no announcement surface may come back by accident.
+	for _, needle := range []string{`id="notice"`, "renderNotice", "announcement"} {
+		if strings.Contains(body, needle) {
+			t.Fatalf("panel still carries the announcement banner: %q", needle)
+		}
 	}
-	if strings.Count(body, `rel="noopener noreferrer"`) < 2 {
+	// External links must open in a new tab without leaking the referrer.
+	if strings.Count(body, `rel="noopener noreferrer"`) < 1 {
 		t.Fatal("external links must carry rel=noopener noreferrer")
 	}
 	// Token counts are the unit quota packages are denominated in; the panel must
 	// convert amounts with the gateway's own rate rather than showing only USD.
 	if !strings.Contains(body, "tokens_per_usd") {
 		t.Fatal("panel must convert USD amounts to tokens like the CLI does")
+	}
+}
+
+// A forced refresh often returns identical numbers (quota moves slowly, and the
+// gateway lags), so the click has to acknowledge itself in the UI or the button
+// reads as dead.
+func TestPanelRefreshShowsInFlightFeedback(t *testing.T) {
+	body := string(renderPanel())
+	if !strings.Contains(body, "刷新中…") {
+		t.Fatal("the reload button must show an in-flight label")
+	}
+	if !strings.Contains(body, `aria-live="polite"`) {
+		t.Fatal("the status line must announce updates to assistive tech")
+	}
+	// Re-entry guard: the disabled button does not cover the key form's Enter
+	// handler or the initial load.
+	if !strings.Contains(body, "if (loading) return;") {
+		t.Fatal("load() must not run concurrently with itself")
 	}
 }
 

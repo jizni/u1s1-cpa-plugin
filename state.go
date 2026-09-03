@@ -9,7 +9,6 @@ package main
 import (
 	"net/http"
 	"sync"
-	"time"
 )
 
 // --- plugin config (config.go) ---
@@ -36,14 +35,6 @@ var attestationCache sync.Map
 // model id -> thinkingProfile, fed by fetchModels, read by thinking.go /
 // executor.go through thinkingProfileFor.
 var thinkingProfiles sync.Map
-
-// --- gateway operator notice (announcement.go) ---
-// Fed by fetchModels; the panel reads it through currentAnnouncement.
-var (
-	announcementMu        sync.RWMutex
-	announcementSeen      *gatewayAnnouncement
-	announcementFetchedAt time.Time
-)
 
 // --- model catalog cache (models.go) ---
 // authID -> modelCacheEntry, read/written by handleModelForAuth.

@@ -12,11 +12,17 @@ jobs:
     # ubuntu-22.04 (glibc 2.35) rather than ubuntu-latest (24.04 / glibc 2.39):
     # the CPA container is Debian 12 / glibc 2.36, and the plugin must not
     # require newer glibc symbols than the container provides.
+    #
+    # This image is on GitHub's deprecation path (starts 2026-09-17, fully
+    # unsupported 2027-04-17). It cannot simply move to ubuntu-latest: the
+    # glibc check below would fail. When it is retired, either build in a
+    # Debian 12 container on a newer runner, or verify that the CPA image has
+    # moved to a newer glibc.
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -46,7 +52,7 @@ jobs:
           cat dist/u1s1.so.sha256
 
       - name: Create release and upload assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/u1s1.so

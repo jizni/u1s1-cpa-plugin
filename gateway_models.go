@@ -1,7 +1,6 @@
 // gateway_models.go wraps GET /v1/models: the wire response types and the fetch
 // call. The route also hands out the client_attestation token (see
-// attestation.go) and feeds the thinking-profile and announcement caches
-// (profiles.go, announcement.go).
+// attestation.go) and feeds the thinking-profile cache (profiles.go).
 package main
 
 import (
@@ -77,11 +76,10 @@ type clientAttestation struct {
 }
 
 type modelsResponse struct {
-	Object            string               `json:"object"`
-	Data              []gatewayModel       `json:"data"`
-	Features          map[string]any       `json:"features"`
-	Announcement      *gatewayAnnouncement `json:"announcement"`
-	ClientAttestation *clientAttestation   `json:"client_attestation"`
+	Object            string             `json:"object"`
+	Data              []gatewayModel     `json:"data"`
+	Features          map[string]any     `json:"features"`
+	ClientAttestation *clientAttestation `json:"client_attestation"`
 }
 
 // fetchModels calls GET /v1/models. attestation may be empty: the models route
@@ -109,6 +107,5 @@ func fetchModels(sa storedAuth, attestation, callbackID string) (*modelsResponse
 	for _, m := range decoded.Data {
 		storeThinkingProfile(m)
 	}
-	storeAnnouncement(decoded.Announcement)
 	return &decoded, nil
 }
