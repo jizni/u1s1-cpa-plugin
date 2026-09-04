@@ -23,11 +23,19 @@ type gatewayError struct {
 // gateway request id. The plain message alone is often all a client renders, so
 // without the tail a user reporting a problem has no id to quote and the
 // quota-exhausted case is indistinguishable from a transient failure.
+//
+// Every non-2xx upstream response passes through here, which is why this is also
+// where the request id is recorded for the diagnostics route (diagnostics.go):
+// the tail only reaches whoever was watching that one response.
 func gatewayMessage(body []byte, status int) string {
 	var ge gatewayError
 	if err := json.Unmarshal(body, &ge); err == nil && ge.Error.Message != "" {
+		recordUpstreamError(ge, status)
 		return ge.Error.Message + errorTail(ge, status)
 	}
+	// An unparseable body still carries a status worth remembering; there is just
+	// no id or code in it.
+	recordUpstreamError(gatewayError{}, status)
 	return fmt.Sprintf("upstream %d: %s", status, truncate(strings.TrimSpace(string(body)), 200))
 }
 

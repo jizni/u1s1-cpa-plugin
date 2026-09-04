@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -105,6 +106,68 @@ func TestStreamPanicIsReportedNotFatal(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("pumpStream did not return")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// response headers
+// ---------------------------------------------------------------------------
+
+// The official CLI hit this on its loopback signing proxy: replaying the
+// upstream content-encoding onto an already-decoded body made the local SDK try
+// to inflate plain JSON, turning every non-streaming error into
+// "<status> terminated" (zlib "incorrect header check") and hiding the real
+// message (dist/device-auth.js forwardedResponseHeaders, u1s1-cli 1.5.0).
+//
+// The plugin cannot reproduce it — host.http.do hands back a decoded body and
+// the executor builds its own header set rather than replaying the upstream's.
+// This test pins that property so a future "pass the upstream headers through"
+// change cannot reintroduce the bug the CLI just fixed.
+func TestExecutorDoesNotReplayUpstreamTransportHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Shapes a compressing gateway or edge cache sends. br rather than gzip so
+		// Go's transport leaves the header on the response instead of decoding and
+		// stripping it: the header really is present for the plugin to mishandle.
+		w.Header().Set("Content-Encoding", "br")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	sa := storedAuthFor(t, srv.URL)
+	storage, err := json.Marshal(sa)
+	if err != nil {
+		t.Fatalf("marshal credential: %v", err)
+	}
+	payload, _ := json.Marshal(rpcExecutorRequest{ExecutorRequest: pluginapi.ExecutorRequest{
+		Model:       "deepseek-v4-flash",
+		StorageJSON: storage,
+		Payload:     []byte(`{"messages":[{"role":"user","content":"hi"}]}`),
+	}})
+	raw, err := handleMethod(pluginabi.MethodExecutorExecute, payload)
+	if err != nil {
+		t.Fatalf("executor.execute error = %v", err)
+	}
+	var resp pluginapi.ExecutorResponse
+	unwrapResult(t, raw, &resp)
+
+	for _, name := range []string{"Content-Encoding", "Transfer-Encoding", "Content-Length", "Connection"} {
+		if got := resp.Headers.Get(name); got != "" {
+			t.Fatalf("response carries upstream %s = %q; the body is already decoded", name, got)
+		}
+	}
+	if ct := resp.Headers.Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("content-type = %q, want application/json", ct)
+	}
+	if !strings.Contains(string(resp.Payload), `"content":"ok"`) {
+		t.Fatalf("payload = %q, want the upstream body verbatim", resp.Payload)
+	}
+
+	// The streaming path builds its own SSE headers for the same reason.
+	for _, name := range []string{"Content-Encoding", "Transfer-Encoding", "Content-Length"} {
+		if got := streamHeaders().Get(name); got != "" {
+			t.Fatalf("stream headers carry %s = %q", name, got)
+		}
 	}
 }
 

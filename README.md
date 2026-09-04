@@ -100,7 +100,7 @@ plugins:
 | --- | --- | --- |
 | `base-url` | `https://api.u1s1.io/v1` | 网关基础 URL（鉴权路由挂在 origin 根路径下）。 |
 | `client` | `terminal` | `x-u1s1-client` 的值。 |
-| `client-version` | `1.4.1` | `x-u1s1-version` 的值；需与真实 CLI 发布版本保持一致。 |
+| `client-version` | `1.5.0` | `x-u1s1-version` 的值；需与真实 CLI 发布版本保持一致。 |
 | `user-agent` | `pi (linux ...; x64)` | 必须保持 `pi (...)` 指纹。 |
 
 同名环境变量也生效：`U1S1_BASE_URL`、`U1S1_CLIENT`、`U1S1_CLIENT_VERSION`、
@@ -178,12 +178,17 @@ false` 的模型，`(off)` 会落到最低强度而不是被拒绝。不带后�
 折算）。有待领取的免费用量包时，账号行上出现指向官网 dashboard 的角标（领取需要浏览器
 会话和两道人机验证，插件无法代劳）。
 
+工具栏的「最近错误」按钮列出最近 10 次上游失败的时间、HTTP 状态、错误代号和网关
+请求编号。网关给每个失败请求都铸了一个 `request_id`，客服凭它直查日志；在此之前它
+只存在于那一次失败响应的错误文本里（也就是客户端的刷屏里）。记录只在内存，重启清空。
+
 JSON 路由（需要管理密钥）：
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | GET | `/v0/management/plugins/u1s1/usage` | 所有 u1s1 凭证的额度；加 `?refresh=1` 跳过 30 秒缓存。 |
 | POST | `/v0/management/plugins/u1s1/refresh` | 强制重新读取 `/v1/me`，忽略缓存。 |
+| GET | `/v0/management/plugins/u1s1/diagnostics` | 最近 10 次上游失败的网关请求编号（报障用）。 |
 
 资源页面本身不做管理鉴权（宿主契约），所以 HTML 里**不带**任何额度或凭证数据。它从
 `?key=`、`sessionStorage` 或控制台同源 `localStorage` 取管理密钥，再调用带鉴权的路由；

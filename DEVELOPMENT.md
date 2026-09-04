@@ -72,57 +72,58 @@ Go 的 `ecdsa.SignASN1` 输出 DER，会被网关直接拒绝。见 `dpop.go:sig
 
 入口层（cgo 边界 + 分发）：
 
-| 文件 | 行数 | 职责 |
+| 文件 | 职责 |
 |---|---|---|
-| `abi.go` | 174 | cgo C ABI 骨架：C preamble、四个导出入口、触碰 C 符号的 `writeResponse` / `hostCall` |
-| `dispatch.go` | 105 | 方法分发 `handleMethod`、`dispatchMethod`、panic 屏障 |
-| `bridge.go` | 61 | 插件↔宿主信封协议（`{ok,result,error}`）、`hostBridgeUnwrap` |
+| `abi.go` | cgo C ABI 骨架：C preamble、四个导出入口、触碰 C 符号的 `writeResponse` / `hostCall` |
+| `dispatch.go` | 方法分发 `handleMethod`、`dispatchMethod`、panic 屏障 |
+| `bridge.go` | 插件↔宿主信封协议（`{ok,result,error}`）、`hostBridgeUnwrap` |
 
 配置与共享状态：
 
-| 文件 | 行数 | 职责 |
+| 文件 | 职责 |
 |---|---|---|
-| `config.go` | 156 | 插件配置（base-url/client/client-version/user-agent）、注册声明 |
-| `state.go` | 67 | 全部包级可变状态集中处（每块标注读写者，为拆包留口子） |
+| `config.go` | 插件配置（base-url/client/client-version/user-agent）、注册声明 |
+| `state.go` | 全部包级可变状态集中处（每块标注读写者，为拆包留口子） |
 
 凭证与安全原语：
 
-| 文件 | 行数 | 职责 |
+| 文件 | 职责 |
 |---|---|---|
-| `credentials.go` | 149 | 凭证结构 `storedAuth`（含 Extra 保留往返）、解析校验 |
-| `dpop.go` | 217 | JWK 解析与配对校验、P-256 密钥生成、P1363 签名、DPoP 头构造 |
-| `headers.go` | 46 | 客户端指纹头、签名头（指纹 + DPoP + attestation） |
-| `attestation.go` | 153 | client_attestation 令牌缓存（提前刷新、失败退避、并发合并） |
+| `credentials.go` | 凭证结构 `storedAuth`（含 Extra 保留往返）、解析校验 |
+| `dpop.go` | JWK 解析与配对校验、P-256 密钥生成、P1363 签名、DPoP 头构造 |
+| `headers.go` | 客户端指纹头、签名头（指纹 + DPoP + attestation） |
+| `attestation.go` | client_attestation 令牌缓存（提前刷新、失败退避、并发合并） |
 
 网关端点（wire 层，按端点一文件）：
 
-| 文件 | 行数 | 职责 |
+| 文件 | 职责 |
 |---|---|---|
-| `gateway_models.go` | 111 | `/v1/models` 端点与响应 wire 类型 |
-| `profiles.go` | 81 | 每模型 thinking 契约缓存（由 `/models` 喂养，executor 读取） |
-| `gateway_me.go` | 64 | `/v1/me` 端点与额度 wire 类型 |
-| `gateway_device.go` | 98 | `/auth/device/start` / `poll` 端点 |
-| `gateway_errors.go` | 57 | 上游错误解析与错误尾巴（HTTP 状态 · code · 请求编号） |
+| `gateway_models.go` | `/v1/models` 端点与响应 wire 类型 |
+| `profiles.go` | 每模型 thinking 契约缓存（由 `/models` 喂养，executor 读取） |
+| `gateway_me.go` | `/v1/me` 端点与额度 wire 类型 |
+| `gateway_device.go` | `/auth/device/start` / `poll` 端点 |
+| `gateway_errors.go` | 上游错误解析与错误尾巴（HTTP 状态 · code · 请求编号） |
+| `diagnostics.go` | 最近上游失败的环形缓存（请求编号留痕，管理路由读取） |
 
 能力实现：
 
-| 文件 | 行数 | 职责 |
+| 文件 | 职责 |
 |---|---|---|
-| `auth.go` | 389 | 登录会话、poll 状态机、`auth.parse`、refresh、AuthData 与 metadata 构造 |
-| `models.go` | 204 | 模型表映射为 ModelInfo（含价格/免费包说明）、attestation 回写 |
-| `thinking.go` | 164 | 模型后缀拆解、等级映射、按 request_format 写上游推理字段 |
-| `executor.go` | 442 | 请求体归一化、非流式/流式执行、SSE 扫描与 framing、token 估算 |
-| `upstream.go` | 431 | 宿主 HTTP 桥接（buffered + streaming）、stream emit/close、日志脱敏 |
-| `management.go` | 400 | 管理路由、额度快照缓存（双锁）、用量包标签 |
-| `host_auth.go` | 87 | `host.auth.list` / `host.auth.get` 封装 |
+| `auth.go` | 登录会话、poll 状态机、`auth.parse`、refresh、AuthData 与 metadata 构造 |
+| `models.go` | 模型表映射为 ModelInfo（含价格/免费包说明）、attestation 回写 |
+| `thinking.go` | 模型后缀拆解、等级映射、按 request_format 写上游推理字段 |
+| `executor.go` | 请求体归一化、非流式/流式执行、SSE 扫描与 framing、token 估算 |
+| `upstream.go` | 宿主 HTTP 桥接（buffered + streaming）、stream emit/close、日志脱敏 |
+| `management.go` | 管理路由、额度快照缓存（双锁）、用量包标签 |
+| `host_auth.go` | `host.auth.list` / `host.auth.get` 封装 |
 
 面板与工具：
 
-| 文件 | 行数 | 职责 |
+| 文件 | 职责 |
 |---|---|---|
-| `panel.go` | 25 | 面板 HTML 嵌入与 base path 注入 |
+| `panel.go` | 面板 HTML 嵌入与 base path 注入 |
 | `panel.html` | 365 | 额度面板（内嵌，不加载任何第三方脚本） |
-| `util.go` | 25 | UUID / 随机 hex |
+| `util.go` | UUID / 随机 hex |
 
 ---
 
@@ -156,33 +157,23 @@ Go 的 `ecdsa.SignASN1` 输出 DER，会被网关直接拒绝。见 `dpop.go:sig
 
 ### 插件替换需重启容器（除非用带版本号的文件名）
 
-CPA 的插件宿主（`pluginhost`）只在**插件文件路径变化**时才重建插件：
-`ApplyConfig` 用 `cleanPluginPath(loaded.path) != cleanPluginPath(file.Path)` 判断，
-覆盖同一个 `u1s1.so` 文件 + `touch config.yaml` 不会触发重载，宿主仍持有旧库的 inode。
-
-因此覆盖式替换（哪怕只是改配置）后必须重启容器：
+CPA 宿主只在**插件文件路径变化**时重建插件：覆盖同一个 `u1s1.so` + `touch config.yaml`
+不会触发重载（宿主仍持有旧库 inode）。因此覆盖式替换后必须重启容器：
 
 ```bash
 cp dist/u1s1.so <cpa>/plugins/linux/amd64/u1s1.so && docker restart cli-proxy-api
 ```
 
-重启后核对日志确认新版本已加载：模型重新注册（`Registered new model u1s1/...`）、
-宿主调用 `auth.refresh`（`refreshed u1s1, ...`）。管理面板的 `/v0/resource/plugins/u1s1/panel`
-返回 200 说明管理路由已注册。
+重启后核对日志（模型重新注册 `Registered new model u1s1/...`、宿主调 `auth.refresh`）确认
+新版本已加载。
 
-宿主自 v7.2.147 支持不重启热替换，前提是**换文件名**：文件名写成 `u1s1-v<版本>.so`
-（`pluginFileFromPath` 按 `-v` 拆出版本号，`u1s1-v0.2.2.so` → id `u1s1` / version `0.2.2`），
-放进同一目录后触发一次配置重载（改 `config.yaml` 或管理台 `PATCH /v0/management/plugins/u1s1/enabled`）。
-路径变了，`ApplyConfig` 就会走替换分支：先对旧库调 `plugin.quiesce`（本插件没实现这个方法，
-宿主按 `unknown_method` 当"不支持"记 debug 日志放过），加载新库、注册成功后才把旧库挪进
-`retired`，失败则回滚到旧库。多版本共存时选最高版本号，且带版本号的文件优先于不带的
-（`pluginFilePreferred`）。
-
-两个坑：**旧文件会被删**——每个进程的第一次成功 `ApplyConfig` 会跑一次
-`cleanupUnselectedPluginFiles`，把同 id 但未被选中的 `.so` 直接 `os.Remove`，所以目录里一旦
-有了 `u1s1-v*.so`，下次重启就会把无版本号的 `u1s1.so` 删掉（`.bak-*` 后缀不是 `.so`，不受影响）。
-**旧库不会被卸载**——`plugin.quiesce` 只是"别接新活"的礼貌通知，`dlclose` 只在 `UnloadPlugin` /
-`ShutdownAll` 里做，热替换后旧 `.so` 仍映射在进程里直到下次重启。
+宿主自 v7.2.147 支持不重启热替换，前提是**换文件名**：写成 `u1s1-v<版本>.so`
+（`pluginFileFromPath` 按 `-v` 拆版本号），放进同一目录后触发一次配置重载；路径变化后
+`ApplyConfig` 走替换分支（先 `plugin.quiesce` 旧库——本插件没实现，宿主当不支持放过——
+加载新库注册成功才把旧库挪进 `retired`，失败回滚）。两个坑：**旧文件会被删**——进程首次
+`ApplyConfig` 会把同 id 未选中的 `.so` 直接 `os.Remove`，目录里一旦有了 `u1s1-v*.so`，下次
+重启会删掉无版本号的 `u1s1.so`；**旧库不会被卸载**——`dlclose` 只在 `UnloadPlugin` /
+`ShutdownAll` 做，热替换后旧库仍映射在进程里直到下次重启。
 
 这条路径本插件尚未实测，当前部署仍是无版本号的 `u1s1.so` + 重启。
 
@@ -408,12 +399,28 @@ CPA 管理台侧边栏出现 `u1s1` 菜单，指向：
 状态。附带好处是采集额度不再搭一次 `/v1/models`（原来的 `refreshAnnouncementIfStale`
 要拉一次模型表才能刷新公告）。维护公告仍可以从官方 CLI 或官网看到。
 
+**也不展示充值与邀请入口**：CLI 的 `usageCtaLines()` 在 `u1s1 usage` 尾部接了充值锚点和
+邀请加量两条行动项。那是付费用户自己跑的客户端，说得通；面板是 CPA 管理台里的额度
+读数页，不是发这种提醒的地方。回归测试直接钉住了“面板不得出现 `usage-topup-card`”。
+保留的唯一官网外链是 `free_claim` 角标，因为领取确实只能在浏览器里完成。
+
 **免费包待领取**：`/v1/me` 的 `free_claim` 为 `"first"`（首月包）或 `"renew"`（年度包）
 时，账号行上出现指向官网 dashboard 的角标。只能跳转不能代领：领取接口在 `u1s1.io`
 （非网关）且要浏览器会话 Cookie 加两道人机验证，同 §9 的签到结论。
 
-JSON 路由（需管理密钥）：`GET /v0/management/plugins/u1s1/usage` 与
-`POST /v0/management/plugins/u1s1/refresh`（用途、参数见 README「额度面板」）。
+JSON 路由（需管理密钥）：`GET /v0/management/plugins/u1s1/usage`、
+`POST /v0/management/plugins/u1s1/refresh` 与
+`GET /v0/management/plugins/u1s1/diagnostics`（用途、参数见 README「额度面板」）。
+
+**请求编号留痕**（`diagnostics.go`）：网关给每个失败请求铸一个 `request_id`，客服凭它直查
+日志。它原本只出现在 `errorTail()` 拼出的错误文本里，也就是只存在于当时盯着屏幕的那
+个人的刷屏里；等到要报障时已经找不回来。现在 `gatewayMessage()`（所有非 2xx 响应的唯一
+共经之路）顺手把每次失败记进一个长 10 的环，面板工具栏的「最近错误」按钮列出来。
+
+三个刻意的选择：只在内存（这是排查辅助，不是审计日志，重启清空）；存之前就过
+`redactSecrets()`（这份数据会走 HTTP 吐出去，不能只在日志那一侧脱敏）；`code` 按
+`errorTail()` 同一套规则归一（`quota_exceeded` → `insufficient_quota`），否则面板与
+客户端看到的不是同一个词。
 
 错误语义：`/v1/me` 逐凭证读失败时，对应账号在 `accounts` 里带 `error` 字段（面板显示"读取失败"）；
 而 `host.auth.list` 枚举本身失败时，若有旧快照则继续返回旧快照（不污染缓存、不刷新时间戳），
@@ -449,47 +456,22 @@ JSON 路由（需管理密钥）：`GET /v0/management/plugins/u1s1/usage` 与
 ## 7. 测试
 
 测试命令（离线单测、`-race`、`U1S1_LIVE_TEST=1` 联测）见 README「测试」，此处不再重复。
-当前离线测试：69 个测试函数、6 个子测试用例（`go test ./...` 全绿）。覆盖的关键点：
+当前离线测试：77 个测试函数、6 个子测试用例（`go test ./...` 全绿），按域覆盖：
 
-- DPoP 证明的完整结构，且签名能用公钥验签通过；私钥标量不出现在 header 的 JWK 里
-- 公私钥不配对的 JWK 在解析期被拒
-- 指纹头完整性（缺一个就意味着线上 403）
-- `auth.parse` 只认领 u1s1 文件、不误伤其他 provider
-- 凭证身份不嵌入完整设备令牌
-- 请求体归一化（强制 model、stream 开关、`stream_options` 增删）
-- SSE 扫描丢弃 `[DONE]` 和非法 JSON
-- 跨格式入口的 `data: ` framing 判定
-- **流式中途上游断开必须报错**（已 emit 过 chunk 也要报），而客户端断开必须静默
-- 空流、上游 4xx 的错误路径
-- attestation：未知过期时间不被无限信任、缺 `expires_in` 不会每请求重拉、刷新与读取共用缓存键
-- 设备登录 `interval` 钳制保留更慢的值；永久性 4xx 结束会话而非一路 pending
-- 登录时 `/models` 先于 `/me`，且 `/me` 带上刚拿到的 attestation
-- `auth.refresh` / `model.for_auth` 的 AuthUpdate 不重算 FileName
-- 空 email / 空 prefix 不写进 metadata 与 attributes
-- 面板资源路由精确匹配（不吃裸前缀、子路径、兄弟前缀）
-- 面板 HTML 不泄漏凭证/额度、无自带主题开关、工具栏在正常文档流内
-- 日志脱敏（长前缀优先，`u1s1d-` 不被 `u1s1-` 抢先匹配）；`plugin_error` 信封也脱敏
-- 流式桥接错误透传上游状态码（宿主返回 4xx 且无 stream_id 时不再误报"bridge unavailable"）
-- 枚举失败不污染 usage 快照缓存；无快照可回退时 usage/refresh 路由返回 502
-- **metadata 包含凭证全集**（逐键比对 StorageJSON），空 attestation 也显式写入，否则重新
-  登录会被旧凭证覆盖
-- 未建模字段（priority/note/proxy_url/weight/excluded_models/headers/…）在
-  解码→编码往返与 `auth.refresh` 后完整保留
-- 声明 `refresh_interval_seconds`，且小于 `attestationUnknownTTL - attestationRefreshMargin`
-- thinking 后缀：从 model id 剥除；三种 request_format 各自的字段形状；未声明的等级回退到
-  default；`can_disable:false` 的模型不发 disable；数字 budget；未知模型不添加字段；
-  `fetchModels` 缓存 profile
-- panic 不穿越 cgo 边界：转成 `plugin_panic` 信封并脱敏；pump goroutine 的 panic 变成流错误
-- 同一凭证的并发 attestation 刷新合并为一次 `/models`（不再串行化聊天请求）
-- usage 采集期间 `snapshotTime()` 不被阻塞
-- `count_tokens` 返回正数估算且随提示长度增长（CJK 按字、拉丁按字节）
-- 模型说明：免费包覆盖与价格倍数的基准选取、不足 2 倍不说倍数、老网关缺
-  `free_package_eligible` 时不下覆盖结论、峰/闲价标出当前生效档、价格不被四舍五入
-- `thinking.levels` 存在但 `reasoning: false` 的模型仍暴露思考等级
-- 错误文本尾巴带 HTTP 状态码/错误代号/请求编号，`insufficient_quota` 归一
-- 强制刷新（`POST /refresh`）不接受早于本次请求的快照，但可复用与它重叠的采集（并发合并）
-- 面板刷新中的反馈：按钮文案、`aria-live`、`load()` 重入锁
-- `/me` 的 `free_claim` 为 null 时不报错且不渲染角标
+- **DPoP/指纹**：证明可验签、私钥不出现在 JWK；公私钥不配对在解析期被拒；指纹头完整性与
+  版本形状（缺一个即线上 403）
+- **凭证**：`auth.parse` 只认领 u1s1 文件；metadata 含凭证全集（空 attestation 也显式写入）；
+  未建模字段在解码→编码往返后保留；AuthUpdate 不重算 FileName；声明 `refresh_interval_seconds`
+- **executor**：请求体归一化、SSE 扫描、流式中途上游断开必须报错而客户端断开静默；
+  空流/4xx 错误路径；`count_tokens` 估算；不回放上游传输头
+- **attestation**：未知 TTL 有界、并发刷新合并、刷新与读取共用缓存键
+- **设备登录**：`interval` 钳制保留更慢的值；永久性 4xx 结束会话；`/models` 先于 `/me`
+- **thinking**：后缀剥离、三种 request_format 字段形状、未声明等级回退、未知模型不猜字段
+- **面板/管理**：路由精确匹配、HTML 无泄漏、刷新反馈与重入锁、强制刷新新鲜度与并发合并、
+  枚举失败不污染快照缓存、`free_claim` 为 null 不报错
+- **错误与诊断**：错误尾巴带请求编号且 `insufficient_quota` 归一、失败入环且有界/脱敏、
+  diagnostics 路由已注册、日志脱敏长前缀优先
+- **边界**：panic 不穿越 cgo、`snapshotTime()` 不被采集阻塞、模型说明与价格不四舍五入
 
 ---
 
@@ -497,145 +479,97 @@ JSON 路由（需管理密钥）：`GET /v0/management/plugins/u1s1/usage` 与
 
 ### 流式截断被静默吞掉
 
-`pumpStream` 原来用 `if emitted == 0` 判断要不要上报错误，本意是"emit 失败说明客户端已
-断开，别往死流里写"。但它分不清失败来源：**上游**读失败（网络断、SSE 单行超 4MB）发生在
-已 emit 若干 chunk 之后时，函数直接返回，宿主补上自己的 `[DONE]`，客户端看到一份截断但
-"正常结束"的回答。
+`pumpStream` 用 `if emitted == 0` 判断是否上报错误，分不清失败来源：**上游**读失败（网络断、
+SSE 单行超 4MB）发生在已 emit 若干 chunk 之后时，函数直接返回，宿主补上自己的 `[DONE]`，
+客户端看到一份截断却"正常结束"的回答。
 
-修法：把 emit 失败单独记成 `emitBroken`，只有它为真才静默；其余失败即使已 emit 过也照报。
-逻辑抽到 `pumpStreamChunks()` 便于注入 emit/emitError 做测试。回归测试
-`TestPumpStreamReportsUpstreamFailureAfterChunks`（用 hijack 制造无终止 chunk 的连接）与
+修法：emit 失败单独记成 `emitBroken`，只有它为真才静默；逻辑抽到 `pumpStreamChunks()`
+便于注入测试。回归：`TestPumpStreamReportsUpstreamFailureAfterChunks` /
 `TestPumpStreamStaysSilentWhenClientDisconnects`。
 
 ### prefix 静默丢失
 
-`AuthData.Metadata` 里写入 `"prefix": ""` 会覆盖宿主已存的 model prefix。宿主只补齐
-**缺失**的 metadata 键，显式空值它照抄。结果是重启后 `u1s1/*` 全部消失，请求报
-`unknown provider for model u1s1/deepseek-v4-flash`。
-
-修法：prefix 非空才写入该键，空值交给宿主回填。回归测试
-`TestAuthDataOmitsEmptyOptionalMetadata`。
-
-另一半原因：宿主只对**原生解析**的凭证文件自动回填 `Prefix` 字段，插件解析路径必须
-自己在 `AuthData.Prefix` 里回显。
-
-同一类问题还适用于 `email`（metadata + attributes）：空值不写，交给宿主回填。
+`AuthData.Metadata` 写 `"prefix": ""` 会覆盖宿主已存的 model prefix（宿主只补齐**缺失**键，
+显式空值照抄），重启后 `u1s1/*` 全部消失。修法：prefix 非空才写入，空值交给宿主回填；
+`email` 同理。另一半原因：宿主只对**原生解析**的凭证自动回填 `Prefix`，插件解析路径
+必须在 `AuthData.Prefix` 回显。回归：`TestAuthDataOmitsEmptyOptionalMetadata`。
 
 ### 模型数量翻倍
 
-`sdk/cliproxy/service_models.go` 的 `applyModelPrefixes()` 对设了 prefix 的凭证会
-`addModel` 两次：
-
-```go
-if !forceModelPrefix || trimmedPrefix == baseID {
-    addModel(model)      // 裸 id
-}
-clone := *model
-clone.ID = trimmedPrefix + "/" + baseID
-addModel(&clone)         // 带前缀 id
-```
-
-上游只有 6 个模型，注册出 12 条。开 `force-model-prefix: true` 跳过第一个分支即可。
-
-副作用：撞名的裸 id 在开关打开前会同时挂着两个 provider 的凭证，调度器随机挑选；
-打开后归属清晰。u1s1 独有的模型裸名会返回 400，必须带前缀访问。
+宿主 `applyModelPrefixes()` 对设了 prefix 的凭证 `addModel` 两次（裸 id + 带前缀 id），
+6 个模型注册出 12 条。开 `force-model-prefix: true` 跳过裸 id 分支。副作用：撞名的裸 id
+在开关打开前同时挂着两个 provider，调度随机；u1s1 独有裸名上游返回 400，必须带前缀。
 
 ### 重新登录被旧凭证覆盖
 
-与"prefix 静默丢失"同源，但方向相反，后果严重得多。`authDataFor()` 把 `ID` 和
-`FileName` 都算成 `u1s1-<email>`，因此重新批准设备后，宿主的 `saveTokenRecord`
-会先读出**同名的旧文件**，再用 `MergeExistingAuthMetadata` 把旧 map 里所有键补进新记录。
-`deviceToken` / `devicePrivateJwk` / `attestation` 都不在宿主的 `IsAuthTokenPayloadKey`
-白名单里（那个白名单只有 `access_token` 那一族），于是旧设备令牌直接盖掉刚下发的新令牌。
-旧令牌若已在网关侧失效，结果是重登之后依旧 401，且凭证文件看上去完全正常。
+与"prefix 静默丢失"同源但方向相反。`authDataFor()` 把 `ID`/`FileName` 算成 `u1s1-<email>`，
+重登后宿主 `saveTokenRecord` 读出**同名旧文件**，`MergeExistingAuthMetadata` 把旧 map 所有键
+补进新记录；`deviceToken`/`devicePrivateJwk`/`attestation` 不在宿主
+`IsAuthTokenPayloadKey` 白名单（只有 `access_token` 一族），旧令牌直接盖掉新令牌，
+重登后依旧 401 且凭证文件看似正常。
 
-修法：`credentialMetadata()` 把整份凭证写进 metadata（而不只是 email/prefix），并对
-`attestation` / `attestationExpiresAt` 显式写空值。回归测试
-`TestAuthDataPublishesEveryCredentialKeyInMetadata` 逐键比对 metadata 与 StorageJSON，
-`TestAuthDataPublishesEmptyAttestationExplicitly` 盯住空值那一半。
-
-两条规则共存并不矛盾：`prefix`/`email` 靠 `omitempty` 保持**缺失**让宿主回填，
-凭证字段靠**存在**阻止宿主回填。
+修法：`credentialMetadata()` 把整份凭证写进 metadata，`attestation`/`attestationExpiresAt`
+显式写空值。回归：`TestAuthDataPublishesEveryCredentialKeyInMetadata` /
+`TestAuthDataPublishesEmptyAttestationExplicitly`。两条规则不矛盾：`prefix`/`email` 靠
+`omitempty` 保持**缺失**让宿主回填，凭证字段靠**存在**阻止宿主回填。
 
 ### auth.refresh 从来没被调用过
 
-文档曾经写着"`auth.refresh` 每 12 小时被宿主调用一次"，实际上一次也没调过。插件只设了
-`AuthData.NextRefreshAfter`，而那个字段只能**推迟**一次已经被决定要做的刷新，它不会
-发起刷新。宿主 `shouldRefresh()` 的判定链：`NextRefreshAfter` 已过 → 无
-`RefreshEvaluator` → 无 `refresh_interval_seconds` → `ProviderRefreshLead("u1s1")`，
-而 `refreshLeadFactories` 只注册了 codex/claude/antigravity/kimi/xai → 返回 `nil` →
-`shouldRefresh` 为 false，`nextRefreshCheckAt` 也返回 `scheduled=false`，凭证根本不进
-自动刷新堆。
+插件只设 `AuthData.NextRefreshAfter`，但那个字段只能**推迟**一次已被决定要做的刷新，
+不会发起刷新。宿主 `shouldRefresh()` 判定链里第三方 provider 的 `ProviderRefreshLead`
+返回 `nil`（`refreshLeadFactories` 只注册 codex/claude/antigravity/kimi/xai），凭证
+根本不进自动刷新堆——这正好解释了为何上面两个写盘 bug 一直没被发现。
 
-这正好解释了为何上面两个写盘 bug 一直没被发现——写盘路径几乎没被走到。
-
-修法：metadata 与 attributes 都写 `refresh_interval_seconds: 43200`。回归测试
-`TestAuthDataRequestsRefreshInterval`，并顺手断言该值小于
-`attestationUnknownTTL - attestationRefreshMargin`（否则网关缺 `expires_in` 时刷新会
-追不上过期）。
+修法：metadata 与 attributes 都写 `refresh_interval_seconds: 43200`。回归：
+`TestAuthDataRequestsRefreshInterval`，并断言该值小于
+`attestationUnknownTTL - attestationRefreshMargin`（否则缺 `expires_in` 时刷新追不上过期）。
 
 ### 结构体往返吞掉用户字段
 
-`auth.refresh` 和 `model.for_auth` 都是 `parseStored()` → 改 attestation →
-`json.Marshal()`。`storedAuth` 只建模 11 个字段，凭证文件里其余的键在 marshal 时消失：
-`priority`、`note`、`proxy_url`、`weight`、`excluded_models`、`disabled`、
-`request_retry`、`headers`。用户在管理台设的值每次刷新掉一次。
+`storedAuth` 只建模 11 个字段，`auth.refresh`/`model.for_auth` 的
+`parseStored()` → 改 attestation → `json.Marshal()` 往返会让其余键（`priority`、`note`、
+`proxy_url`、`weight`、`excluded_models`、`disabled`、`request_retry`、`headers`）消失，
+用户设置每次刷新掉一次。
 
 修法：`storedAuth.Extra map[string]json.RawMessage` + 自定义
-`MarshalJSON`/`UnmarshalJSON`，未建模的键原样过渡，已建模字段优先。已建模键集合由结构体
-tag 反射得出，以后加字段不会漏改。回归测试 `TestStoredAuthPreservesUnknownKeys` 与
+`MarshalJSON`/`UnmarshalJSON`，未建模键原样过渡，已建模字段优先；键集合由结构体 tag
+反射得出，加字段不会漏改。回归：`TestStoredAuthPreservesUnknownKeys` /
 `TestAuthRefreshPreservesUserFields`。
 
 ### thinking 后缀被原样发给上游
 
-`model.for_auth` 声明了 `Thinking.Levels`，于是客户端可以请求
-`u1s1/deepseek-v4-flash(high)`。宿主 `rewriteModelForAuth` 只剥 `u1s1/` 前缀，不剥后缀：
-
-```
-u1s1/deepseek-v4-flash(high)  →  executor req.Model = "deepseek-v4-flash(high)"
-```
-
-旧 `resolveModel()` 直接把它塞进 `obj["model"]`，上游返回 400。所有原生 executor 都走
-`thinking.ParseSuffix(req.Model).ModelName`，插件漏了这一步；同时也没把 level 翻译成上游
-要的形状。修法见 §5 的「thinking 后缀」。
+宿主 `rewriteModelForAuth` 只剥 `u1s1/` 前缀不剥后缀，`u1s1/deepseek-v4-flash(high)`
+进入 executor 时 `req.Model` 仍带 `(high)`，旧 `resolveModel()` 原样塞进 `obj["model"]`，
+上游 400。所有原生 executor 都走 `thinking.ParseSuffix(req.Model).ModelName`，插件漏了
+这一步，也没把 level 翻译成上游要的形状。修法见 §5「thinking 后缀」。
 
 ### panic 穿越 cgo 边界
 
-插件原本没有任何 `recover()`。宿主的 `defer recover()` 只保护它自己那一侧的调用；
-`cliproxyPluginCall` 里的 panic 穿不回去，会直接带倒整个 CPA 进程，而不是被宿主的
-`fusePlugin` 熔断。`pumpStream` 的 goroutine 更糟——那里连 cgo 帧都没有。
+插件原本没有任何 `recover()`：宿主 `defer recover()` 只护自己那一侧，`cliproxyPluginCall`
+里的 panic 会带倒整个 CPA 进程而非被熔断；`pumpStream` goroutine 更糟（连 cgo 帧都没有）。
 
 修法：`guardDispatchPanic()` 把 panic 转成脱敏后的 `plugin_panic` 信封；
-`reportStreamPanic()` 把 pump goroutine 的 panic 转成流错误，且 `streamClose` 先 defer
-后执行，客户端不会卡在一个被抛弃的流上。
+`reportStreamPanic()` 把 pump goroutine 的 panic 转成流错误，`streamClose` 先 defer
+后执行，客户端不会卡在被抛弃的流上。
 
 ### shutdown 的 SIGSEGV
 
-`cliproxyPluginShutdown` 原本遍历 `loginSessions` 做 `Delete`。宿主在自己 Go runtime
-开始拆解**之后**才调 shutdown，随即 `dlclose`；此时触碰任何 Go runtime 状态（含
-`sync.Map`）在 cgo 里会 SIGSEGV。workbuddy 插件把同一个函数故意留空就是这个原因
-（他们每次 docker restart 都能复现）。清理本身也没意义：进程都要退了。
+`cliproxyPluginShutdown` 原遍历 `loginSessions` 做 `Delete`；宿主在自己 Go runtime 开始
+拆解**之后**才调 shutdown 随即 `dlclose`，此时触碰任何 Go runtime 状态（含 `sync.Map`）
+在 cgo 里 SIGSEGV（workbuddy 插件留空同因）。清理本身也没意义：进程都要退了。
 
 修法：空实现 + 注释说明为何不能动。
 
 ### 刷新按钮点了没反应
 
-`POST /refresh` 稳定返回 200，但面板上的数字和“更新于”时间戳都不动。日志把病灶指得很清楚：
-GET `usage` 的冷路径 ~1s（N 个 `/me` 往返），而 `refresh` 只花 67ms——根本没出网。
+`cachedUsage()` 拿到 `usageCollectMu` 后复查缓存时写死 `freshUsageSnapshot(false)`，
+"TTL 内的快照就够"——首屏 `usage` 刚填满缓存，用户几秒后点刷新，30 秒内的强制刷新
+一律被自己的旧快照满足（日志：GET `usage` 冷路径 ~1s，`refresh` 只花 67ms，根本没出网）。
 
-`cachedUsage()` 拿到 `usageCollectMu` 之后要复查一次缓存（等锁期间可能已有别人采集完），
-原来这次复查写死 `freshUsageSnapshot(false)`，理由是“调用方要新数据，不是要 N 趟采集”。
-但 `false` 意味着“TTL 内的快照就够”，于是 30 秒内的强制刷新一律被自己的旧快照满足。
-而面板的常态恰好就是这个窗口：首屏 `usage` 刚把缓存填满，用户几秒后才点到刷新。
-
-修法：`freshUsageSnapshot(force, requestedAt)` 把“够新”的判据换成时间点而不是布尔量——
-强制调用方只接受**采集时间晚于本次请求发起时刻**的快照。这样既保住了并发合并（真正与
-本次重叠的采集仍可复用，不会退化成 N 趟 `/me`），又不可能把调用方要求替换的那份快照
-还给它。TTL 只对普通加载有意义，强制路径不再看它。
-
-另一半是 UI：额度本来就变得慢，网关的计数还有延迟，所以一次成功的强制刷新经常前后
-一模一样。数字不变时“按钮有没有生效”无从判断，因此按钮在飞行中改文案并禁用，状态行
-用 `aria-live` 播报，`load()` 自带重入锁（禁用按钮盖不住密钥表单的 Enter 和首屏加载）。
+修法：`freshUsageSnapshot(force, requestedAt)` 把"够新"判据换成**时间点**——强制调用只
+接受采集时间晚于本次请求发起时刻的快照，既保住并发合并又不把要替换的快照还给它；
+TTL 只对普通加载有意义。UI 侧：按钮飞行中改文案并禁用 + `aria-live` 播报 + `load()`
+重入锁（额度变化慢，数字不变时必须有"按钮已生效"的反馈）。
 
 ### 次要修正
 
@@ -654,64 +588,73 @@ GET `usage` 的冷路径 ~1s（N 个 `/me` 往返），而 `refresh` 只花 67ms
 
 ---
 
-## 8.1 跟进 u1s1-cli 1.4.1
+## 8.1 跟进 u1s1-cli 1.4.1（历史）
 
-对照 1.3.2 → 1.4.1 的 `dist/` 变更逐项核对，与插件相关的四处已跟进：
+对照 1.3.2 → 1.4.1 的 `dist/` 变更，与插件相关的四处已跟进：`client-version` → `1.4.1`
+（其余指纹无变化：pi-coding-agent 0.84.4 / openai SDK 6.40.0 / node v22.23.2）；错误文本带
+`(HTTP 429 · code · 请求编号 …)` 尾巴且 `insufficient_quota` 归一（`errorTail()`）；
+`free_package_eligible` 纳入模型说明；面板向 `u1s1 usage` 新口径对齐（Token 为主、
+`login_checkin_bonus` 标签、`free_claim` 角标）。未跟进项（`/help`、`deploy --help`、限流
+原因透传等）都是 CLI 自己的 TUI 交互，与网关契约无关。
 
-**`client-version` → `1.4.1`**。指纹头必须跟真实发布版保持一致：网关的完整性拦截文案直接
-说"请升级并重新登录 u1s1"。实测 1.3.2 今天仍然 200（`x-u1s1-version` 不在当前拦截条件
-里），但押它永远不进拦截规则没有意义。其余指纹本版无变化：pi-coding-agent 0.84.4、
-内嵌 openai SDK 6.40.0、node v22.23.2，与 `stainlessPackageVersion` /
-`stainlessRuntimeVersion` 当前值一致。
+---
 
-**错误文本带上尾巴**。新增的 `dist/error-humanize.js` 把模型调用错误从
-`429: {json}` 改写成"中文正文 + (HTTP 429 · code · 请求编号 …)"。尾巴的两个理由在它
-的注释里写得很死：`insufficient_quota` 是 pi 区分"不要重试"的分类关键字，
-`request_id` 是客服直查日志的唯一凭据。`gatewayMessage()` 因此不再只返回 `message`，
-还把状态码/代号/请求编号拼在末尾（`errorTail()`），并把 `type: insufficient_quota` 与
-`code: quota_exceeded` 归一到同一个词。
+## 8.2 跟进 u1s1-cli 1.5.0
 
-**模型说明**。`free_package_eligible` 是 1.4.1 新增的网关字段，CLI 用它派生选择器里那一行
-"免费包可抵扣 / 不走免费包·约 N 倍"（同时删掉了内置目录的硬编码价格，价格权威全归
-网关）。插件把它变成 `ModelInfo.Description`，详见 §5。
+1.4.1 → 1.5.0 之间还发了 1.4.2 和 1.4.3，因此逐版对照的是四份 `dist/`（1.4.2 引入
+`secret-env.js` 与原子落盘、1.4.3 引入 `stripEnvOverrides`、1.5.0 引入 telemetry /
+feedback / nudges / prompt / request-trace 五个新模块）。
 
-**面板向 `u1s1 usage` 新口径对齐**。CLI 把额度报告抽成 `usageReportLines()` 供会话内
-`/usage` 复用，同时：`login_checkin_bonus` 标签定为"打卡加成"（插件原作"打卡加量"）；
-"本月成本"改叫"本月已用"并以 Token 为主；不走免费包的模型从"仅可使用余额"改为
-"可用余额或全模型包"。面板同步了这三处。另外新增了 `free_claim` 角标（见 §6）。
+### 已跟进
 
-面板的 JS 不由 Go 单测执行，因此改完额外用 `node --check` 验语法，再把 `renderAccount`
-提到最小 DOM 桩上跑一遍，确认两种网关（有/无 `tokens_per_usd`）下都
-不出 `undefined` / `NaN`。Go 单测只能盯住面板的结构不变式（数据不泄露、无自带主题
-开关、外链带 `rel=noopener noreferrer`、用 `tokens_per_usd` 换算）。
+**`client-version` → `1.5.0`**（本次唯一影响线上可用性的项）。其余指纹核实无变化：
+pi-coding-agent 仍 0.84.4、openai SDK 仍 6.40.0、node 仍 v22.23.2。新增
+`TestClientVersionLooksLikeARelease` 钉住形状（三段数字、SDK 的 x.y.z、node 的 vX.Y.Z），
+让改常量成为一次有意的编辑。
 
-没有跟进的部分：1.4.1 的其余变更（`/help` 会话内命令、空目录开场提示、`deploy --help`、
-子命令拼错纠正、登录限流原因透传）都是 CLI 自己的 TUI 交互，与网关契约无关。
-`/v1/models` 的 `price_bands`（峰/闲价）官方 CLI 自己也还没用上，只有网页价格表在读；
-插件直接把当前生效的那一档写进了说明。
+**请求编号留痕**（`diagnostics.go` + 面板「最近错误」）。CLI 1.5.0 新增 `request-trace.js`
+把最近报错 `request_id` 落盘供 `u1s1 feedback` 附上。插件没有 feedback 命令但有同一个
+需求：编号是客服唯一的检索键。详见 §6。
+
+**上游传输头不回放**（回归测试，无产品代码改动）。CLI 修的是本地签名代理把上游
+`content-encoding` 原样 replay 到已解码 body，SDK 去解压纯 JSON，所有非流式错误变成
+`<status> terminated`。插件不会犯这个错（`host.http.do` 回的是已解码 body，executor
+自己构造响应头），但属于"现在恰好对"而非"被钉住"，因此补了
+`TestExecutorDoesNotReplayUpstreamTransportHeaders`。用 `br` 而非 `gzip` 造场景：Go
+transport 自动解 gzip 并摘头，用 gzip 测试是空转的。
+
+### 明确不跟进
+
+| 变更 | 不跟进理由 |
+| --- | --- |
+| `usageCtaLines()` 充值/邀请入口 | 面板是 CPA 管理台读数页，不是提醒页；回归钉住"不得出现 `usage-topup-card`" |
+| `POST /v1/telemetry` | 围绕"一个 TUI 进程 = 一次会话"；插件无会话概念，且 CLI 自己给了 `U1S1_TELEMETRY=0` 开关 |
+| `POST /v1/support/tickets` | 建工单是终端用户交互；工单需要的 `request_id` 已由 diagnostics 路由提供 |
+| `GET /public/announcements/latest` | 公告链路上版已整体移除（§6），维护公告仍可从官方 CLI/官网看到 |
+| `secret-env.js` 子进程密钥守卫 | 插件不 spawn 子进程、不把凭证放进环境变量，用完即弃 |
+| `writePrivateFile` / `stripEnvOverrides` | CLI 对 `~/.u1s1/config.json` 的写盘行为；插件凭证由宿主落盘，无自己的写盘路径 |
+| `install.sh` SHA256 校验 | 插件分发是 GitHub Release 的 `u1s1.so` + `u1s1.so.sha256`，校验已在那条链路里 |
+| 项目信任透传 / 字面量密钥 / deploy/nudges / import 时机 / `PI_SKIP_VERSION_CHECK` | 都在 CLI 的 pi 宿主一侧，插件没有对应面 |
+
+面板 JS 依旧不由 Go 单测执行，本次按 §8.1 的做法验证：`node --check` 过两个 script 块，
+再把 `renderAccount` / `renderDiagnostics` 提到最小 DOM 桩上跑四种账号形态与三种
+diagnostics 形态，确认不出 `undefined` / `NaN`，并断言上游文本经过转义。
 
 ---
 
 ## 9. 未实现：每日签到
 
-网页版签到端点是 `POST https://u1s1.io/api/packages/login-checkin/claim`（注意域名是
-`u1s1.io`，不是 `api.u1s1.io`）。无法接入，三个原因：
+网页版签到端点 `POST https://u1s1.io/api/packages/login-checkin/claim`（注意是 `u1s1.io`
+不是 `api.u1s1.io`）无法接入，三个原因：
 
-**鉴权体系不同。** 网站 API 用浏览器会话 Cookie（`credentials: "same-origin"`），不认设备
-DPoP。用设备凭证签名请求 `/api/me` 和签到端点均返回 `401 not logged in`。
+- **鉴权体系不同**：网站 API 用浏览器会话 Cookie，不认设备 DPoP，设备签名请求返回 401
+- **网关侧无等价路由**：`/v1/checkin` 等候选路由全部 404；`/v1/me` 不含打卡状态；设备令牌
+  换 Web 会话的入口不存在
+- **双重人机验证**：claim 强制携带 capcat + Cloudflare Turnstile token（还有
+  `phone_required` 前置门槛），需要真实浏览器执行挑战
 
-**网关侧无等价路由。** 试过 `/v1/checkin`、`/v1/packages/login-checkin/claim`、
-`/v1/me/checkin`、`/v1/login-checkin/claim`、`/v1/claim/login-checkin`、`/v1/checkin/status`
-全部 404。`/v1/me` 的顶层字段不含网页版的 `login_checkin`（打卡状态、连续天数、日历数据）。
-设备令牌换 Web 会话的入口也不存在（`/auth/device/session`、`/auth/device/exchange`、
-`/auth/session` 均 404）。
-
-**双重人机验证。** claim 请求体强制携带 capcat（`cap-widget`）token 和 Cloudflare
-Turnstile token（action 绑定为 `claim_login_checkin`），Turnstile 处于启用状态。此外签到
-还有 `phone_required` 前置门槛。这两个 token 需要真实浏览器执行挑战。
-
-可选替代（未实现）：从 `/v1/me` 的 `login_checkin` 类型用量包的 `created_at` 可以推断历史
-打卡日期，据此在面板上展示"今日是否已打卡 / 连续天数"并提供跳转到官网 dashboard 的按钮。
+可选替代（未实现）：从 `/v1/me` 的 `login_checkin` 类型用量包 `created_at` 推断历史打卡
+日期，在面板展示"今日是否已打卡 / 连续天数"并跳转官网。
 
 ---
 

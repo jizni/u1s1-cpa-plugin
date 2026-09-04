@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"math/big"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -126,6 +127,34 @@ func TestClientHeadersCarryFingerprint(t *testing.T) {
 	}
 	if !strings.HasPrefix(headers["user-agent"], "pi (") {
 		t.Fatalf("user-agent = %q, want the pi client fingerprint", headers["user-agent"])
+	}
+}
+
+// The fingerprint must name a real u1s1-cli release: the gateway's integrity
+// notice tells users to "升级并重新登录 u1s1", so a version that was never
+// published is exactly what that check looks for. This test does not know which
+// release is current — it pins the shape so bumping the constant is a deliberate
+// edit rather than something that drifts silently.
+func TestClientVersionLooksLikeARelease(t *testing.T) {
+	parts := strings.Split(defaultClientVersion, ".")
+	if len(parts) != 3 {
+		t.Fatalf("defaultClientVersion = %q, want a three-part CLI release version", defaultClientVersion)
+	}
+	for _, part := range parts {
+		if part == "" {
+			t.Fatalf("defaultClientVersion = %q has an empty component", defaultClientVersion)
+		}
+		if _, err := strconv.Atoi(part); err != nil {
+			t.Fatalf("defaultClientVersion = %q component %q is not numeric", defaultClientVersion, part)
+		}
+	}
+	// The stainless block is the embedded OpenAI SDK fingerprint of that same
+	// release; a bare major or an empty value would not match any real client.
+	if strings.Count(stainlessPackageVersion, ".") != 2 {
+		t.Fatalf("stainlessPackageVersion = %q, want the SDK's x.y.z", stainlessPackageVersion)
+	}
+	if !strings.HasPrefix(stainlessRuntimeVersion, "v") {
+		t.Fatalf("stainlessRuntimeVersion = %q, want the node vX.Y.Z form", stainlessRuntimeVersion)
 	}
 }
 

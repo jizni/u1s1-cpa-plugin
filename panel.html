@@ -133,6 +133,7 @@ code{background:var(--surface-muted);padding:1px 5px;border-radius:4px;font-size
   <div class="sub">今日免费额度 · 永久余额 · 用量包明细（与 <code>u1s1 usage</code> 一致）</div>
   <div class="bar">
     <button id="reload">刷新</button>
+    <button id="diag" class="sec">最近错误</button>
     <span id="stamp" class="stamp" role="status" aria-live="polite"></span>
   </div>
   <div id="root"><p class="mut">加载中…</p></div>
@@ -191,6 +192,10 @@ function readConsoleKey() {
 const getKey = () => keySuppressed ? null : (readSessionKey() || readConsoleKey());
 
 /* ---- formatting -------------------------------------------------------- */
+// The dashboard is where a claimable free package is actually claimed (the claim
+// endpoint needs a browser session plus two captchas). The panel links there for
+// that reason only — it is a quota readout, not a place to advertise top-ups.
+const DASHBOARD_URL = "https://u1s1.io/dashboard";
 const usd = n => "$" + (Number(n) || 0).toFixed(2);
 // Matches the CLI's 万/亿 formatting so numbers line up with `u1s1 usage`.
 function tokens(n) {
@@ -289,7 +294,7 @@ function renderAccount(a) {
   // A claimable free package is only claimable on the website: the claim endpoint
   // needs a browser session plus two captchas, so link there instead of a button.
   const claim = a.free_claim
-    ? `<a class="tag claim" href="https://u1s1.io/dashboard" target="_blank" rel="noopener noreferrer">${
+    ? `<a class="tag claim" href="${DASHBOARD_URL}" target="_blank" rel="noopener noreferrer">${
         a.free_claim === "first" ? "有免费用量包可领" : "免费用量包可续"}</a>`
     : "";
   return `<div class="card">
@@ -357,7 +362,52 @@ async function load(force) {
   }
 }
 
+/* ---- diagnostics ------------------------------------------------------- */
+// The gateway mints a request_id for every failure and support looks requests up
+// by it. It otherwise only appears in the error text of the one response that
+// failed, which is gone by the time anyone asks.
+function renderDiagnostics(data) {
+  const rows = (data.errors || []).map(e => `<tr>
+      <td>${localTime(e.at)}</td>
+      <td class="num">${esc(e.status || "—")}</td>
+      <td>${esc(e.code || "—")}</td>
+      <td>${e.request_id ? `<code>${esc(e.request_id)}</code>` : "—"}</td>
+      <td>${esc(e.message || "")}</td>
+    </tr>`).join("");
+  return `<div class="card">
+    <div class="acct-head"><span class="acct-email">最近的上游错误</span>
+      <span class="mut">插件 ${esc(data.plugin_version || "—")} · 客户端指纹 ${esc(data.client_version || "—")}</span></div>
+    ${rows ? `<table><thead><tr>
+        <th>时间</th><th class="num">HTTP</th><th>代号</th><th>请求编号</th><th>说明</th>
+      </tr></thead><tbody>${rows}</tbody></table>`
+      : '<div class="mut">重启以来没有上游错误。</div>'}
+    <div class="note">报障时附上请求编号，客服可凭它直查网关日志。只保留最近 ${esc(data.max_records || 0)} 条，重启清空。</div>
+  </div>`;
+}
+
+async function loadDiagnostics() {
+  if (loading) return;
+  loading = true;
+  const root = document.getElementById("root");
+  const btn = document.getElementById("diag");
+  const label = btn.textContent;
+  btn.textContent = "读取中…";
+  btn.disabled = true;
+  try {
+    root.innerHTML = renderDiagnostics(await callAPI("/plugins/u1s1/diagnostics"));
+    document.getElementById("stamp").textContent = "最近错误 · 点「刷新」回到额度";
+  } catch (e) {
+    if (e.needKey) renderLogin(e.message === "missing management key" ? "" : e.message);
+    else root.innerHTML = `<div class="card err">加载失败：${esc(e.message)}</div>`;
+  } finally {
+    loading = false;
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
 document.getElementById("reload").onclick = () => load(true);
+document.getElementById("diag").onclick = () => loadDiagnostics();
 if (window.__u1s1ThemeSync) window.__u1s1ThemeSync();
 load();
 </script>

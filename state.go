@@ -65,3 +65,11 @@ var (
 	httpClientOnce sync.Once
 	sharedClient   *http.Client
 )
+
+// --- recent upstream failures (diagnostics.go) ---
+// Bounded ring of gateway request ids, appended by gatewayMessage on every
+// non-2xx response and read by the management diagnostics route.
+var (
+	diagMu   sync.Mutex
+	diagRing []diagnosticRecord
+)

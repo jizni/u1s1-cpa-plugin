@@ -79,6 +79,7 @@ func managementRegistration() managementRegistrationResponse {
 		Routes: []managementRoute{
 			{Method: http.MethodGet, Path: base + "/usage", Description: "u1s1 quota for all credentials: daily free allowance, balance, and packages."},
 			{Method: http.MethodPost, Path: base + "/refresh", Description: "Drop the cached quota snapshot and re-read /v1/me."},
+			{Method: http.MethodGet, Path: base + "/diagnostics", Description: "Recent upstream failures with their gateway request ids, for support reports."},
 		},
 		Resources: []resourceRoute{
 			{Path: "/panel", Menu: "u1s1", Description: "u1s1 dashboard: free allowance, balance, and quota packages."},
@@ -369,6 +370,17 @@ func handleManagement(raw []byte) ([]byte, error) {
 			"status":     "ok",
 			"accounts":   accounts,
 			"fetched_at": snapshotTime(),
+		}))
+
+	// The gateway mints a request id for every failure and support looks requests
+	// up by it. Without this route the id lives only in the error text of the one
+	// response that failed, so by the time anyone asks for it, it is gone.
+	case req.Method == http.MethodGet && path == base+"/diagnostics":
+		return okEnvelope(jsonResponse(http.StatusOK, map[string]any{
+			"errors":         recentUpstreamErrors(),
+			"max_records":    maxDiagnosticRecords,
+			"client_version": activeConfig().ClientVersion,
+			"plugin_version": pluginVersion,
 		}))
 
 	default:

@@ -565,6 +565,14 @@ func TestPanelHasNoLocalThemeSwitchAndFlowToolbar(t *testing.T) {
 	if !strings.Contains(body, "tokens_per_usd") {
 		t.Fatal("panel must convert USD amounts to tokens like the CLI does")
 	}
+	// The panel is a quota readout for the operator, not a storefront. The CLI's
+	// usage report ends with top-up and invite calls to action (dist/usage.js
+	// usageCtaLines); those belong in the client a paying user runs, not in a CPA
+	// admin console. The one dashboard link that stays is the free_claim badge,
+	// which exists because claiming genuinely requires a browser session.
+	if strings.Contains(body, "usage-topup-card") {
+		t.Fatal("panel must not carry the top-up call to action")
+	}
 }
 
 // A forced refresh often returns identical numbers (quota moves slowly, and the
