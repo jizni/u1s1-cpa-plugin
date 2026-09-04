@@ -25,7 +25,9 @@ type hostAuthGetResponse struct {
 
 // isU1S1AuthName recognizes credential files owned by this plugin. File name is
 // the reliable discriminator across host versions; Type/Provider may be absent
-// on hand-placed files.
+// on hand-placed files. Check-in sidecars (any *.checkin*) are never
+// credentials, even though the legacy v0.2.4 name ended in .json — the host
+// scans auth-dir for *.json and must not see the sidecar as a second account.
 func isU1S1AuthName(name string) bool {
 	trimmed := strings.ToLower(strings.TrimSpace(name))
 	if trimmed == "" {
@@ -34,6 +36,9 @@ func isU1S1AuthName(name string) bool {
 	base := trimmed
 	if idx := strings.LastIndexAny(base, "/\\"); idx >= 0 {
 		base = base[idx+1:]
+	}
+	if strings.Contains(base, ".checkin") {
+		return false
 	}
 	return strings.HasPrefix(base, providerName+"-") && strings.HasSuffix(base, ".json")
 }

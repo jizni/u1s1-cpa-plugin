@@ -42,7 +42,12 @@ const (
 	// beijingOffset is China Standard Time: UTC+8 with no DST.
 	beijingOffset = 8 * 60 * 60
 	// checkinSidecarSuffix marks the cookie/state file next to a credential.
-	checkinSidecarSuffix = ".checkin.json"
+	// Deliberately NOT *.json: the host scans auth-dir for *.json and would
+	// otherwise list the sidecar as a second (broken) u1s1 credential.
+	checkinSidecarSuffix = ".checkin"
+	// legacyCheckinSidecarSuffix is the v0.2.4 suffix that collided with the
+	// host credential discovery; loadCheckinSidecar migrates it on first read.
+	legacyCheckinSidecarSuffix = ".checkin.json"
 )
 
 var beijingLoc = time.FixedZone("Asia/Shanghai", beijingOffset)
@@ -153,14 +158,28 @@ func nextCheckinAfter(now time.Time, slots []int) time.Time {
 // falls back to a temp-dir name so state still works for the session.
 func checkinSidecarPath(credPath string) string {
 	if strings.TrimSpace(credPath) == "" {
-		return filepath.Join(os.TempDir(), "u1s1-checkin-"+randomHex(8)+".json")
+		return filepath.Join(os.TempDir(), "u1s1-checkin-"+randomHex(8))
 	}
 	return credPath + checkinSidecarSuffix
 }
 
 // loadCheckinSidecar reads the per-credential state; a missing file means no
-// cookie configured yet.
+// cookie configured yet. A file left by v0.2.4 (credPath + ".checkin.json") is
+// renamed to the current name on first read so the host stops listing it as a
+// credential while the stored cookie survives the upgrade.
 func loadCheckinSidecar(path string) (*checkinSidecar, error) {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		legacy := path + ".json"
+		if _, errLegacy := os.Stat(legacy); errLegacy == nil {
+			if errRename := os.Rename(legacy, path); errRename == nil {
+				hostLog("info", "u1s1: migrated legacy check-in sidecar "+filepath.Base(legacy))
+			} else {
+				// Keep reading the legacy file if rename failed (e.g. cross-device);
+				// it still holds the cookie for this session.
+				path = legacy
+			}
+		}
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -371,7 +390,9 @@ func runScheduledCheckins(origin string) {
 			continue
 		}
 		state := runCheckinFor(origin, "", sa.Email, resp.Path, "")
-		hostLog("info", fmt.Sprintf("u1s1: check-in %s (%s): %s", entry.Name, state.Status, state.Message))
+		// Log the email, not the file name: redactSecrets treats any u1s1-
+		// prefix as a credential and would swallow the whole file name.
+		hostLog("info", fmt.Sprintf("u1s1: check-in %s (%s): %s", sa.Email, state.Status, state.Message))
 	}
 }
 
@@ -481,13 +502,13 @@ func handleCheckinSetCookie(authIndex, cookie, callbackID string) (*checkinAccou
 	if me.LoginCheckin != nil {
 		row.TodayClaimed = me.LoginCheckin.ClaimedToday
 	}
-	hostLog("info", "u1s1: check-in cookie updated for "+resp.Name)
+	hostLog("info", "u1s1: check-in cookie updated for "+sa.Email)
 	return &row, nil
 }
 
 // handleCheckinClearCookie removes the persisted cookie for one credential.
 func handleCheckinClearCookie(authIndex string) error {
-	_, resp, err := hostAuthGet(authIndex)
+	sa, resp, err := hostAuthGet(authIndex)
 	if err != nil {
 		return err
 	}
@@ -499,7 +520,7 @@ func handleCheckinClearCookie(authIndex string) error {
 	if err := saveCheckinSidecar(checkinSidecarPath(resp.Path), sc); err != nil {
 		return err
 	}
-	hostLog("info", "u1s1: check-in cookie cleared for "+resp.Name)
+	hostLog("info", "u1s1: check-in cookie cleared for "+sa.Email)
 	return nil
 }
 

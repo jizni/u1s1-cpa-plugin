@@ -90,14 +90,18 @@ func TestCheckinSidecarRoundTrip(t *testing.T) {
 	if err := saveCheckinSidecar(checkinSidecarPath(path), sc); err != nil {
 		t.Fatalf("save error = %v", err)
 	}
-	info, err := os.Stat(checkinSidecarPath(path))
+	scPath := checkinSidecarPath(path)
+	if !strings.HasSuffix(scPath, checkinSidecarSuffix) || strings.HasSuffix(scPath, ".json") {
+		t.Fatalf("sidecar path %q must end in %q and not in .json", scPath, checkinSidecarSuffix)
+	}
+	info, err := os.Stat(scPath)
 	if err != nil {
 		t.Fatalf("stat error = %v", err)
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("sidecar mode = %v, want 0600", info.Mode().Perm())
 	}
-	loaded, err := loadCheckinSidecar(checkinSidecarPath(path))
+	loaded, err := loadCheckinSidecar(scPath)
 	if err != nil {
 		t.Fatalf("load error = %v", err)
 	}
@@ -108,6 +112,46 @@ func TestCheckinSidecarRoundTrip(t *testing.T) {
 	missing, err := loadCheckinSidecar(filepath.Join(dir, "nope.json"))
 	if err != nil || missing.Cookie != "" {
 		t.Fatalf("missing sidecar = %+v, err %v", missing, err)
+	}
+}
+
+// TestCheckinSidecarMigratesLegacyJSON ensures a v0.2.4 sidecar (name ended in
+// .checkin.json and was picked up by the host as a credential) is renamed on
+// first read so the stored cookie survives and the file stops colliding.
+func TestCheckinSidecarMigratesLegacyJSON(t *testing.T) {
+	dir := t.TempDir()
+	credPath := filepath.Join(dir, "u1s1-user-example.com.json")
+	legacy := credPath + ".checkin.json"
+	if err := saveCheckinSidecar(legacy, &checkinSidecar{Cookie: "session=legacy"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadCheckinSidecar(checkinSidecarPath(credPath))
+	if err != nil {
+		t.Fatalf("load error = %v", err)
+	}
+	if loaded.Cookie != "session=legacy" {
+		t.Fatalf("cookie = %q, want the legacy value migrated", loaded.Cookie)
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("legacy sidecar %q still exists after migration", legacy)
+	}
+	if _, err := os.Stat(checkinSidecarPath(credPath)); err != nil {
+		t.Fatalf("migrated sidecar missing: %v", err)
+	}
+}
+
+// TestIsU1S1AuthNameRejectsCheckinSidecar pins the root-cause fix: the host
+// scans auth-dir for *.json and the legacy sidecar name looked like a
+// credential; both the legacy and current names must be excluded.
+func TestIsU1S1AuthNameRejectsCheckinSidecar(t *testing.T) {
+	if isU1S1AuthName("u1s1-jizni-qq.com.json.checkin.json") {
+		t.Fatal("legacy sidecar name must not be treated as a u1s1 credential")
+	}
+	if isU1S1AuthName("u1s1-jizni-qq.com.json.checkin") {
+		t.Fatal("current sidecar name must not be treated as a u1s1 credential")
+	}
+	if !isU1S1AuthName("u1s1-jizni-qq.com.json") {
+		t.Fatal("real credential name must still be recognized")
 	}
 }
 
