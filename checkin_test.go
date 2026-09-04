@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -42,6 +44,31 @@ func TestCheckinSlotsParsesDefaultAndDropsInvalid(t *testing.T) {
 	// Dedupe.
 	if got := checkinSlots("08:00,08:00"); len(got) != 1 {
 		t.Fatalf("duplicate slots not deduped: %v", got)
+	}
+}
+
+// TestCheckinSlotsSortedOutOfOrderInput pins the P2 fix: a non-ascending config
+// must not skip the earliest slot (nextCheckinAfter / catch-up assume slots[0]
+// is the day's first run).
+func TestCheckinSlotsSortedOutOfOrderInput(t *testing.T) {
+	got := checkinSlots("20:00,08:00,12:00")
+	want := []int{8 * 60, 12 * 60, 20 * 60}
+	if len(got) != len(want) {
+		t.Fatalf("sorted slots = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("sorted slots = %v, want %v", got, want)
+		}
+	}
+	// And nextCheckinAfter must now pick 08:00 the morning after a 20:00 config.
+	slots := checkinSlots("20:00,08:00")
+	if slots[0] != 8*60 {
+		t.Fatalf("slots[0] = %d, want the earliest slot after sorting", slots[0])
+	}
+	at := time.Date(2026, 9, 4, 21, 0, 0, 0, beijingLoc)
+	if got := nextCheckinAfter(at, slots); got.Format("15:04") != "08:00" {
+		t.Fatalf("nextCheckinAfter(21:00) = %s, want 08:00 tomorrow", got.Format("15:04"))
 	}
 }
 
@@ -78,6 +105,108 @@ func TestCookiePreviewMasksSecret(t *testing.T) {
 	got := cookiePreview("session=0123456789abcdefsecretvalue")
 	if strings.Contains(got, "0123456789abcdefsecretvalue") || !strings.HasPrefix(got, "session=") {
 		t.Fatalf("preview leaked the secret: %q", got)
+	}
+}
+
+// TestNormalizeCookieStripsDevtoolsNoise pins the P3 fix: users paste cookies
+// from browser devtools as "Cookie: name=value" or with surrounding quotes;
+// both must be stripped before validation so a valid paste does not 401.
+func TestNormalizeCookieStripsDevtoolsNoise(t *testing.T) {
+	cases := map[string]string{
+		"session=abc":              "session=abc",
+		"Cookie: session=abc":      "session=abc",
+		"cookie: session=abc":      "session=abc",
+		"'session=abc'":            "session=abc",
+		"\"Cookie: session=abc\"":  "session=abc",
+		"  Cookie:  session=abc  ": "session=abc",
+		"  ":                       "",
+		"Cookie:  ":                "",
+	}
+	for in, want := range cases {
+		if got := normalizeCookie(in); got != want {
+			t.Errorf("normalizeCookie(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestCorruptSidecarAutoResets pins the P3 fix: a corrupted sidecar must be
+// backed up and reset so save/clear keep working, not brick every write.
+func TestCorruptSidecarAutoResets(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "u1s1-user-example.com.checkin")
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sc, err := loadCheckinSidecar(path)
+	if err != nil {
+		t.Fatalf("corrupt sidecar must reset, not error: %v", err)
+	}
+	if sc.Cookie != "" || sc.LastRun != nil {
+		t.Fatalf("reset sidecar must be empty, got %+v", sc)
+	}
+	if _, err := os.Stat(path + ".corrupt"); err != nil {
+		t.Fatalf("corrupt backup missing: %v", err)
+	}
+	// The file is writable again after the reset.
+	if err := saveCheckinSidecar(path, &checkinSidecar{Cookie: "session=ok"}); err != nil {
+		t.Fatalf("save after reset error = %v", err)
+	}
+}
+
+// TestCookiePreviewRuneSafe pins the P3 fix: preview must not slice mid-rune
+// and must never leak the full secret.
+func TestCookiePreviewRuneSafe(t *testing.T) {
+	long := "u1s1_session=" + strings.Repeat("字", 20) + "abc1234"
+	got := cookiePreview(long)
+	if !utf8.ValidString(got) {
+		t.Fatalf("preview produced invalid UTF-8: %q", got)
+	}
+	if strings.Contains(got, "abc1234") {
+		t.Fatalf("preview leaked the tail: %q", got)
+	}
+}
+
+// TestUpdateCheckinSidecarSerializes pins the P1 fix: a concurrent clear and a
+// scheduler write-back must not resurrect the cleared cookie. The update runs
+// under a per-path lock so the last writer wins on each field, not the whole
+// object.
+func TestUpdateCheckinSidecarSerializes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "u1s1-user-example.com.checkin")
+	if err := saveCheckinSidecar(path, &checkinSidecar{Cookie: "session=a", UpdatedAt: nowRFC3339()}); err != nil {
+		t.Fatal(err)
+	}
+
+	const n = 50
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			// Half the goroutines clear the cookie, half write a LastRun record.
+			if i%2 == 0 {
+				_ = updateCheckinSidecar(path, func(sc *checkinSidecar) { sc.Cookie = "" })
+			} else {
+				_ = updateCheckinSidecar(path, func(sc *checkinSidecar) {
+					sc.LastRun = &checkinRunState{At: nowRFC3339(), Status: "ok", Message: "打卡成功"}
+				})
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	sc, err := readCheckinSidecar(path)
+	if err != nil {
+		t.Fatalf("read error = %v", err)
+	}
+	// The cookie field must end up cleared: updateCheckinSidecar never
+	// whole-object-writes a stale copy, so a clear can only lose to another
+	// explicit cookie write, never to a LastRun update.
+	if sc.Cookie != "" {
+		t.Fatalf("cookie resurrected after concurrent clear: %q", sc.Cookie)
+	}
+	if sc.LastRun == nil {
+		t.Fatal("LastRun should have been recorded")
 	}
 }
 
@@ -206,7 +335,7 @@ func TestRunCheckinForFullFlow(t *testing.T) {
 	}
 
 	// Claim succeeds when /api/me reports not claimed.
-	state := runCheckinFor(srv.URL, "", "user@example.com", credPath, "")
+	state := runCheckinFor(srv.URL, "user@example.com", credPath, "")
 	if state.Status != "ok" {
 		t.Fatalf("status = %s (%s)", state.Status, state.Message)
 	}
@@ -240,7 +369,7 @@ func TestRunCheckinForDedupesClaimedToday(t *testing.T) {
 	credPath := filepath.Join(dir, "u1s1-user-example.com.json")
 	_ = saveCheckinSidecar(checkinSidecarPath(credPath), &checkinSidecar{Cookie: "session=good"})
 
-	state := runCheckinFor(srv.URL, "", "", credPath, "")
+	state := runCheckinFor(srv.URL, "", credPath, "")
 	if state.Status != "already" {
 		t.Fatalf("status = %s (%s), want already", state.Status, state.Message)
 	}
@@ -254,7 +383,7 @@ func TestRunCheckinForNoCookie(t *testing.T) {
 	defer srv.Close()
 	dir := t.TempDir()
 	credPath := filepath.Join(dir, "u1s1-user-example.com.json")
-	state := runCheckinFor(srv.URL, "", "", credPath, "")
+	state := runCheckinFor(srv.URL, "", credPath, "")
 	if state.Status != "no_cookie" {
 		t.Fatalf("status = %s (%s), want no_cookie", state.Status, state.Message)
 	}
@@ -268,7 +397,7 @@ func TestRunCheckinForStaleCookieRejected(t *testing.T) {
 	dir := t.TempDir()
 	credPath := filepath.Join(dir, "u1s1-user-example.com.json")
 	_ = saveCheckinSidecar(checkinSidecarPath(credPath), &checkinSidecar{Cookie: "session=stale"})
-	state := runCheckinFor(srv.URL, "", "", credPath, "")
+	state := runCheckinFor(srv.URL, "", credPath, "")
 	if state.Status != "error" || !strings.Contains(state.Message, "重新登录") {
 		t.Fatalf("status = %s (%s), want login error", state.Status, state.Message)
 	}

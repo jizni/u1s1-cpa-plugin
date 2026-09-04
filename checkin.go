@@ -32,7 +32,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -107,8 +109,11 @@ func checkinEnabled() bool {
 }
 
 // checkinSlots parses the configured Beijing-time slots ("08:00,20:00") into
-// minutes since midnight. Invalid entries are dropped; an empty result falls
-// back to the default so a typo cannot silently disable the check-in.
+// minutes since midnight, deduplicated and ascending. Invalid entries are
+// dropped; an empty result falls back to the default so a typo cannot silently
+// disable the check-in. The sort is load-bearing: nextCheckinAfter and the
+// scheduler's catch-up both assume slots[0] is the earliest slot, and an
+// unsorted config like "20:00,08:00" would skip the morning slot forever.
 func checkinSlots(spec string) []int {
 	seen := map[int]bool{}
 	var out []int
@@ -130,6 +135,7 @@ func checkinSlots(spec string) []int {
 	if len(out) == 0 {
 		return checkinSlots(defaultCheckinTimes)
 	}
+	sort.Ints(out)
 	return out
 }
 
@@ -163,10 +169,18 @@ func checkinSidecarPath(credPath string) string {
 	return credPath + checkinSidecarSuffix
 }
 
+// checkinSidecarLock returns the per-path mutex guarding one sidecar file.
+func checkinSidecarLock(path string) *sync.Mutex {
+	v, _ := checkinSidecarLocks.LoadOrStore(path, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
 // loadCheckinSidecar reads the per-credential state; a missing file means no
 // cookie configured yet. A file left by v0.2.4 (credPath + ".checkin.json") is
 // renamed to the current name on first read so the host stops listing it as a
-// credential while the stored cookie survives the upgrade.
+// credential while the stored cookie survives the upgrade. A corrupt file is
+// backed up and reset rather than bricking every save/clear from then on.
+// Callers that go on to write must hold checkinSidecarLock(path); updateCheckinSidecar does.
 func loadCheckinSidecar(path string) (*checkinSidecar, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		legacy := path + ".json"
@@ -189,7 +203,13 @@ func loadCheckinSidecar(path string) (*checkinSidecar, error) {
 	}
 	var sc checkinSidecar
 	if err := json.Unmarshal(raw, &sc); err != nil {
-		return nil, err
+		// Keep the corrupt file for forensics, then start fresh so the panel can
+		// re-enter a cookie instead of failing forever.
+		corrupt := path + ".corrupt"
+		_ = os.Remove(corrupt)
+		_ = os.Rename(path, corrupt)
+		hostLog("warn", "u1s1: check-in sidecar corrupt, reset: "+filepath.Base(path))
+		return &checkinSidecar{}, nil
 	}
 	return &sc, nil
 }
@@ -208,18 +228,58 @@ func saveCheckinSidecar(path string, sc *checkinSidecar) error {
 	return os.Rename(tmp, path)
 }
 
+// updateCheckinSidecar performs one locked read-modify-write on a sidecar.
+// Every path that both reads and writes the same file (scheduler pass, cookie
+// save/clear) goes through here so a concurrent whole-object write-back cannot
+// resurrect a cleared cookie or drop a newly saved one.
+func updateCheckinSidecar(path string, fn func(*checkinSidecar)) error {
+	mu := checkinSidecarLock(path)
+	mu.Lock()
+	defer mu.Unlock()
+	sc, err := loadCheckinSidecar(path)
+	if err != nil {
+		return err
+	}
+	fn(sc)
+	return saveCheckinSidecar(path, sc)
+}
+
+// readCheckinSidecar returns a consistent snapshot under the per-path lock.
+// Used where only the current state is needed (status view, cookie read before
+// a network round-trip).
+func readCheckinSidecar(path string) (*checkinSidecar, error) {
+	mu := checkinSidecarLock(path)
+	mu.Lock()
+	defer mu.Unlock()
+	return loadCheckinSidecar(path)
+}
+
+// normalizeCookie strips what users paste from browser devtools: a leading
+// "Cookie:" label and surrounding quotes. The stored value is the bare header
+// value sent as the Cookie header. Quotes are stripped both before and after
+// the label removal so "Cookie: 'a=b'" and "'Cookie: a=b'" both land on a=b.
+func normalizeCookie(cookie string) string {
+	c := strings.Trim(strings.TrimSpace(cookie), `"'`)
+	if lower := strings.ToLower(c); strings.HasPrefix(lower, "cookie:") {
+		c = strings.TrimSpace(c[len("cookie:"):])
+	}
+	return strings.Trim(c, `"'`)
+}
+
 // cookiePreview masks a cookie for logs/panel: keep the first 8 and last 4
 // characters so the operator can tell two accounts apart without exposing the
-// session secret.
+// session secret. Slicing is rune-based so multibyte cookies cannot produce
+// invalid UTF-8 in the panel.
 func cookiePreview(cookie string) string {
 	c := strings.TrimSpace(cookie)
 	if c == "" {
 		return ""
 	}
-	if len(c) <= 16 {
-		return c[:1] + "…" + c[len(c)-1:]
+	r := []rune(c)
+	if len(r) <= 16 {
+		return string(r[:1]) + "…" + string(r[len(r)-1:])
 	}
-	return c[:8] + "…" + c[len(c)-4:]
+	return string(r[:8]) + "…" + string(r[len(r)-4:])
 }
 
 // webAPIHeaders builds the request headers for website /api/* calls. The
@@ -277,44 +337,42 @@ func claimLoginCheckin(origin, cookie, callbackID string) (*claimResponse, error
 
 // runCheckinFor performs one full check-in pass for one credential: read the
 // sidecar, skip without a cookie, query /api/me to dedupe, then claim. The
-// result is persisted and returned for the panel.
-func runCheckinFor(origin, cookie, email, credPath, callbackID string) *checkinRunState {
+// result is persisted under the per-path lock and returned for the panel.
+// The cookie always comes from the persisted sidecar: a caller-supplied value
+// would have to be validated before it could replace the stored one, and an
+// unvalidated replacement could overwrite a good cookie with a stale paste.
+func runCheckinFor(origin, email, credPath, callbackID string) *checkinRunState {
 	sidecarPath := checkinSidecarPath(credPath)
-	sc, err := loadCheckinSidecar(sidecarPath)
+	sc, err := readCheckinSidecar(sidecarPath)
 	if err != nil {
 		return &checkinRunState{At: nowRFC3339(), Status: "error", Message: "读取打卡状态失败: " + redactSecrets(err.Error())}
 	}
-	if strings.TrimSpace(cookie) == "" && strings.TrimSpace(sc.Cookie) == "" {
+	cookie := normalizeCookie(sc.Cookie)
+	if cookie == "" {
 		return &checkinRunState{At: nowRFC3339(), Status: "no_cookie", Message: "未设置网页 Cookie，请登录 u1s1.io 后更新"}
-	}
-	if strings.TrimSpace(cookie) != "" {
-		sc.Cookie = strings.TrimSpace(cookie)
-		sc.UpdatedAt = nowRFC3339()
 	}
 	if email == "" {
 		email = "account"
 	}
 
 	// Dedupe: if /api/me says today is already claimed, record it and stop.
-	me, errMe := webMe(origin, sc.Cookie, "")
+	// The callback ID rides along so manual runs stay attributed in host logs.
+	me, errMe := webMe(origin, cookie, callbackID)
 	if errMe != nil {
 		state := &checkinRunState{At: nowRFC3339(), Status: "error", Message: redactSecrets(errMe.Error())}
-		sc.LastRun = state
-		_ = saveCheckinSidecar(sidecarPath, sc)
+		_ = updateCheckinSidecar(sidecarPath, func(sc *checkinSidecar) { sc.LastRun = state })
 		return state
 	}
 	if me.LoginCheckin != nil && me.LoginCheckin.ClaimedToday {
 		state := &checkinRunState{At: nowRFC3339(), Status: "already", Message: "今日已打卡"}
-		sc.LastRun = state
-		_ = saveCheckinSidecar(sidecarPath, sc)
+		_ = updateCheckinSidecar(sidecarPath, func(sc *checkinSidecar) { sc.LastRun = state })
 		return state
 	}
 
-	claimed, errClaim := claimLoginCheckin(origin, sc.Cookie, "")
+	claimed, errClaim := claimLoginCheckin(origin, cookie, callbackID)
 	if errClaim != nil {
 		state := &checkinRunState{At: nowRFC3339(), Status: "error", Message: redactSecrets(errClaim.Error())}
-		sc.LastRun = state
-		_ = saveCheckinSidecar(sidecarPath, sc)
+		_ = updateCheckinSidecar(sidecarPath, func(sc *checkinSidecar) { sc.LastRun = state })
 		return state
 	}
 	msg := "打卡成功"
@@ -322,8 +380,7 @@ func runCheckinFor(origin, cookie, email, credPath, callbackID string) *checkinR
 		msg = fmt.Sprintf("打卡成功，解锁连续第 %d 天奖励 %d Token", claimed.MilestoneDay, claimed.BonusTokens)
 	}
 	state := &checkinRunState{At: nowRFC3339(), Status: "ok", Message: msg}
-	sc.LastRun = state
-	_ = saveCheckinSidecar(sidecarPath, sc)
+	_ = updateCheckinSidecar(sidecarPath, func(sc *checkinSidecar) { sc.LastRun = state })
 	return state
 }
 
@@ -349,36 +406,37 @@ func startCheckinScheduler() {
 // checkinLoop waits until the next Beijing-time slot, then runs a full pass for
 // every u1s1 credential, then loops. The startup catch-up is handled by the
 // first pass running immediately when the day's first slot has already passed.
+// Config is re-read every iteration so a runtime reconfigure of the slots or
+// the web origin takes effect at the next wake-up instead of the next restart.
 func checkinLoop() {
-	cfg := activeConfig()
-	origin := cfg.webOrigin()
-	slots := checkinSlots(cfg.CheckinTimes)
-	hostLog("info", "u1s1: check-in scheduler started at "+cfg.CheckinTimes+" (Beijing), web origin "+origin)
+	hostLog("info", "u1s1: check-in scheduler started (Beijing time), web origin "+activeConfig().webOrigin())
 
 	// Catch-up: if we start after today's first slot, claim right away (the
 	// server dedupes per day). If we start before it, sleep until the first slot.
 	now := beijingNow()
-	if now.Hour()*60+now.Minute() < slots[0] {
+	if slots := checkinSlots(activeConfig().CheckinTimes); now.Hour()*60+now.Minute() < slots[0] {
 		time.Sleep(time.Until(nextCheckinAfter(now, slots)))
 	}
-	runScheduledCheckins(origin)
+	runScheduledCheckins()
 
 	for {
-		next := nextCheckinAfter(beijingNow(), slots)
+		cfg := activeConfig()
+		next := nextCheckinAfter(beijingNow(), checkinSlots(cfg.CheckinTimes))
 		time.Sleep(time.Until(next))
-		runScheduledCheckins(origin)
+		runScheduledCheckins()
 	}
 }
 
 // runScheduledCheckins walks every u1s1 credential the host knows about and
 // runs the check-in where a cookie exists. The callback ID is empty: this is a
-// background pass, not a management request. The enabled check runs here (not
-// only at loop start) so a runtime reconfigure that turns the check-in off
-// takes effect at the next slot instead of the next plugin load.
-func runScheduledCheckins(origin string) {
+// background pass, not a management request. The enabled check and config run
+// here (not only at loop start) so a runtime reconfigure takes effect at the
+// next slot instead of the next plugin load.
+func runScheduledCheckins() {
 	if !checkinEnabled() {
 		return
 	}
+	origin := activeConfig().webOrigin()
 	entries, err := hostAuthList()
 	if err != nil {
 		hostLog("warn", "u1s1: check-in pass aborted, host.auth.list failed: "+redactSecrets(err.Error()))
@@ -389,7 +447,7 @@ func runScheduledCheckins(origin string) {
 		if errGet != nil {
 			continue
 		}
-		state := runCheckinFor(origin, "", sa.Email, resp.Path, "")
+		state := runCheckinFor(origin, sa.Email, resp.Path, "")
 		// Log the email, not the file name: redactSecrets treats any u1s1-
 		// prefix as a credential and would swallow the whole file name.
 		hostLog("info", fmt.Sprintf("u1s1: check-in %s (%s): %s", sa.Email, state.Status, state.Message))
@@ -449,7 +507,7 @@ func handleCheckinStatus() (*checkinStatusResponse, error) {
 			if sa.Email != "" {
 				row.Email = sa.Email
 			}
-			sc, errLoad := loadCheckinSidecar(checkinSidecarPath(resp.Path))
+			sc, errLoad := readCheckinSidecar(checkinSidecarPath(resp.Path))
 			if errLoad == nil {
 				if sc.Cookie != "" {
 					row.CookieSet = true
@@ -466,28 +524,38 @@ func handleCheckinStatus() (*checkinStatusResponse, error) {
 
 // handleCheckinSetCookie validates and persists a browser session cookie for
 // one credential. Validation is a live /api/me round-trip: a 401 means the
-// cookie is stale and we refuse to store it.
+// cookie is stale and we refuse to store it. The account reported by /api/me
+// must match the credential the cookie is being attached to, otherwise a
+// multi-credential setup could pin account A's session onto account B and have
+// every "successful" check-in actually belong to A.
 func handleCheckinSetCookie(authIndex, cookie, callbackID string) (*checkinAccountRow, error) {
 	sa, resp, err := hostAuthGet(authIndex)
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(cookie) == "" {
+	cookie = normalizeCookie(cookie)
+	if cookie == "" {
 		return nil, fmt.Errorf("cookie 不能为空")
 	}
 	me, errMe := webMe(activeConfig().webOrigin(), cookie, callbackID)
 	if errMe != nil {
 		return nil, fmt.Errorf("Cookie 验证失败: %s", redactSecrets(errMe.Error()))
 	}
-	sc, errLoad := loadCheckinSidecar(checkinSidecarPath(resp.Path))
-	if errLoad != nil {
-		return nil, errLoad
+	// Ownership guard: a valid session that belongs to a different account is a
+	// paste error, not a credential to store. Missing emails on either side are
+	// tolerated (older gateway / hand-placed files) but a definite mismatch is
+	// rejected loudly instead of silently cross-wiring the accounts.
+	if sa.Email != "" && me.Email != "" && !strings.EqualFold(strings.TrimSpace(sa.Email), strings.TrimSpace(me.Email)) {
+		return nil, fmt.Errorf("Cookie 属于 %s，与凭证 %s 不一致，请检查粘贴的会话", me.Email, sa.Email)
 	}
-	sc.Cookie = strings.TrimSpace(cookie)
-	sc.UpdatedAt = nowRFC3339()
-	if err := saveCheckinSidecar(checkinSidecarPath(resp.Path), sc); err != nil {
+	sidecarPath := checkinSidecarPath(resp.Path)
+	if err := updateCheckinSidecar(sidecarPath, func(sc *checkinSidecar) {
+		sc.Cookie = cookie
+		sc.UpdatedAt = nowRFC3339()
+	}); err != nil {
 		return nil, err
 	}
+	sc, _ := readCheckinSidecar(sidecarPath)
 	row := checkinAccountRow{
 		AuthIndex:  authIndex,
 		Name:       resp.Name,
@@ -507,17 +575,16 @@ func handleCheckinSetCookie(authIndex, cookie, callbackID string) (*checkinAccou
 }
 
 // handleCheckinClearCookie removes the persisted cookie for one credential.
+// The write goes through the per-path lock so a concurrent scheduler pass
+// cannot write back the pre-clear cookie and resurrect it.
 func handleCheckinClearCookie(authIndex string) error {
 	sa, resp, err := hostAuthGet(authIndex)
 	if err != nil {
 		return err
 	}
-	sc, errLoad := loadCheckinSidecar(checkinSidecarPath(resp.Path))
-	if errLoad != nil {
-		return errLoad
-	}
-	sc.Cookie = ""
-	if err := saveCheckinSidecar(checkinSidecarPath(resp.Path), sc); err != nil {
+	if err := updateCheckinSidecar(checkinSidecarPath(resp.Path), func(sc *checkinSidecar) {
+		sc.Cookie = ""
+	}); err != nil {
 		return err
 	}
 	hostLog("info", "u1s1: check-in cookie cleared for "+sa.Email)
@@ -542,7 +609,7 @@ func handleCheckinRun(authIndex, callbackID string) ([]checkinRunResult, error) 
 			out = append(out, checkinRunResult{AuthIndex: entry.AuthIndex, Name: entry.Name, Status: "error", Message: redactSecrets(errGet.Error())})
 			continue
 		}
-		state := runCheckinFor(origin, "", sa.Email, resp.Path, callbackID)
+		state := runCheckinFor(origin, sa.Email, resp.Path, callbackID)
 		out = append(out, checkinRunResult{AuthIndex: entry.AuthIndex, Name: entry.Name, Email: sa.Email, Status: state.Status, Message: state.Message})
 	}
 	return out, nil

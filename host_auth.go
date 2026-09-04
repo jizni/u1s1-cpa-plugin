@@ -43,6 +43,23 @@ func isU1S1AuthName(name string) bool {
 	return strings.HasPrefix(base, providerName+"-") && strings.HasSuffix(base, ".json")
 }
 
+// isCheckinSidecarName reports whether a host-listed file is a check-in sidecar.
+// This is checked unconditionally in hostAuthList, before the Provider/Type
+// shortcut: a host that tags the legacy .checkin.json with Provider=u1s1 would
+// otherwise let the sidecar back in as a phantom credential even though
+// isU1S1AuthName rejects it.
+func isCheckinSidecarName(name string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(name))
+	if trimmed == "" {
+		return false
+	}
+	base := trimmed
+	if idx := strings.LastIndexAny(base, "/\\"); idx >= 0 {
+		base = base[idx+1:]
+	}
+	return strings.Contains(base, ".checkin")
+}
+
 // hostAuthList returns the u1s1 credential records known to the host.
 func hostAuthList() ([]pluginapi.HostAuthFileEntry, error) {
 	raw, err := hostCall(pluginabi.MethodHostAuthList, nil)
@@ -59,6 +76,11 @@ func hostAuthList() ([]pluginapi.HostAuthFileEntry, error) {
 	}
 	out := make([]pluginapi.HostAuthFileEntry, 0, len(resp.Files))
 	for _, f := range resp.Files {
+		// Sidecars are never credentials, regardless of what the host inferred
+		// for Provider/Type from the legacy .checkin.json file name.
+		if isCheckinSidecarName(f.Name) {
+			continue
+		}
 		if strings.EqualFold(f.Provider, providerName) || strings.EqualFold(f.Type, providerName) || isU1S1AuthName(f.Name) {
 			out = append(out, f)
 		}

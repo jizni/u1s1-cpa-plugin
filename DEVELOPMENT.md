@@ -656,10 +656,11 @@ diagnostics 形态，确认不出 `undefined` / `NaN`，并断言上游文本经
 
 现在的实现（`checkin.go`）：
 
-- **Cookie 存哪**：凭证文件旁的 sidecar（`<凭证路径>.checkin.json`，0600 权限，
+- **Cookie 存哪**：凭证文件旁的 sidecar（`<凭证路径>.checkin`，0600 权限，
   写盘是 write+rename）。路径从 `host.auth.get` 返回的 `Path` 推导，因此随
 auth-dir 卷持久化、跟着凭证走。Cookie 只在进程内读写，管理路由和日志只回显
-`cookie_preview`（前 8 后 4 字符）。
+`cookie_preview`（前 8 后 4 字符）。后缀刻意**不用 `.json`**——宿主扫描
+auth-dir 的 `*.json` 会把 sidecar 当成第二份凭证（v0.2.4 的踩坑，见下）。
 - **没有 Cookie 怎么办**：面板签到视图显示「需要登录」，提示用户用浏览器登录
 u1s1.io 后把 Cookie 粘贴进来。保存时插件先调网站 `/api/me` 验证：401 = 会话已
 失效，拒绝落盘。
@@ -683,6 +684,33 @@ u1s1.io 后把 Cookie 粘贴进来。保存时插件先调网站 `/api/me` 验�
 北京时间无夏令时，直接 `time.FixedZone("Asia/Shanghai", 8*3600)`，不依赖系统
 tzdata。`nextCheckinAfter` 返回严格晚于 now 的下一个 `HH:MM`；当天全过则取次日
 首档。计划时刻解析失败时回退默认 `08:00,20:00`，避免配置笔误静默停签。
+档位解析后升序排序：`nextCheckinAfter` 与启动补签都假设 `slots[0]` 是最早档，
+不排序的 `20:00,08:00` 会永久漏掉早晨那档。
+
+### 代码审查修复（v0.2.6）
+
+发布前静态审查发现的九项，全部修复并补测试：
+
+- **sidecar 并发（P1）**：读-改-写整体无锁，清 Cookie 与定时打卡交错时旧对象
+  整体写回会把已清除的 Cookie 复活。现在每路径一把互斥锁（`checkinSidecarLocks`），
+  所有写路径走 `updateCheckinSidecar(path, fn)`（锁内读→改→写），只读走
+  `readCheckinSidecar`。打卡的 `LastRun` 写回同样走锁，且只改 `LastRun` 字段、
+  不动 Cookie，所以清 Cookie 只能输给显式写 Cookie，不会被打卡写回复活。
+- **档位排序（P2）**：见「时区与计划时刻」。
+- **Cookie 归属（P2）**：保存时 `webMe` 返回的邮箱与凭证 `sa.Email` 都非空且
+  不一致则拒绝落盘，避免多账号把 A 的会话粘到 B 上、打卡串号。
+- **callbackID 透传（P2）**：手动「立即签到」的 `HostCallbackID` 一路透传到
+  `webMe` / `claimLoginCheckin`，宿主调用链保持关联。
+- **sidecar 排除（P2）**：`hostAuthList` 对名字含 `.checkin` 的文件无条件排除
+  （先于 Provider/Type 判断），宿主即使给旧 `.checkin.json` 标了 Provider=u1s1
+  也不会再冒出伪账号；旧文件在首次读取时自动改名迁移。
+- **配置热更新（P3）**：调度循环每轮重读 `activeConfig()`，改 `checkin-times` /
+  `web-origin` 下一轮即生效，不再等到重启。
+- **Cookie 归一化（P3）**：粘贴 `Cookie: xxx` / 带引号时自动剥离后再验证。
+- **预览按 rune（P3）**：`cookiePreview` 按 rune 切片，多字节 Cookie 不产生
+  无效 UTF-8。
+- **损坏自愈（P3）**：sidecar JSON 损坏时改名 `.corrupt` 备份并重置为空，
+  面板可重新录入而不是永久写不进。
 
 ---
 

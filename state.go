@@ -81,3 +81,10 @@ var (
 	checkinMu      sync.Mutex
 	checkinStarted bool
 )
+
+// --- check-in sidecar read-modify-write locks (checkin.go) ---
+// Per-path mutexes guarding the cookie/state file: the scheduler goroutine and
+// management handlers (save/clear/run) all do read-modify-write on the same
+// file, and an unlocked whole-object write-back can resurrect a cleared cookie
+// or drop a concurrently saved one. updateCheckinSidecar serializes each path.
+var checkinSidecarLocks sync.Map // path -> *sync.Mutex
