@@ -82,7 +82,7 @@ Go 的 `ecdsa.SignASN1` 输出 DER，会被网关直接拒绝。见 `dpop.go:sig
 
 | 文件 | 职责 |
 |---|---|---|
-| `config.go` | 插件配置（base-url/client/client-version/user-agent）、注册声明 |
+| `config.go` | 插件配置（base-url/client/client-version/user-agent/web-origin/checkin-*）、注册声明 |
 | `state.go` | 全部包级可变状态集中处（每块标注读写者，为拆包留口子） |
 
 凭证与安全原语：
@@ -104,6 +104,7 @@ Go 的 `ecdsa.SignASN1` 输出 DER，会被网关直接拒绝。见 `dpop.go:sig
 | `gateway_device.go` | `/auth/device/start` / `poll` 端点 |
 | `gateway_errors.go` | 上游错误解析与错误尾巴（HTTP 状态 · code · 请求编号） |
 | `diagnostics.go` | 最近上游失败的环形缓存（请求编号留痕，管理路由读取） |
+| `checkin.go` | 每日打卡：网页 Cookie sidecar 存取、`/api/me` 去重、claim 提交、北京时间调度器、管理路由 |
 
 能力实现：
 
@@ -642,19 +643,46 @@ diagnostics 形态，确认不出 `undefined` / `NaN`，并断言上游文本经
 
 ---
 
-## 9. 未实现：每日签到
+## 9. 每日打卡（已实现，2026-09-04）
 
-网页版签到端点 `POST https://u1s1.io/api/packages/login-checkin/claim`（注意是 `u1s1.io`
-不是 `api.u1s1.io`）无法接入，三个原因：
+网页版签到端点 `POST https://u1s1.io/api/packages/login-checkin/claim`（注意是
+`u1s1.io` 不是 `api.u1s1.io`）用浏览器会话 Cookie 鉴权，设备 DPoP 凭证不通用
+（返回 401）。之前未实现，卡在两个误判：
 
-- **鉴权体系不同**：网站 API 用浏览器会话 Cookie，不认设备 DPoP，设备签名请求返回 401
-- **网关侧无等价路由**：`/v1/checkin` 等候选路由全部 404；`/v1/me` 不含打卡状态；设备令牌
-  换 Web 会话的入口不存在
-- **双重人机验证**：claim 强制携带 capcat + Cloudflare Turnstile token（还有
-  `phone_required` 前置门槛），需要真实浏览器执行挑战
+- **验证码无法绕过** —— 实际是 fail-open：仪表盘在 capcat / Turnstile 失败时
+  照样提交 claim（`solveCap(false)` 与 Turnstile 探针失败都返回 `null`），服务端
+  只记一条风控事件、不拦请求。所以请求体里两个 token 传 `null` 即可。
+- **网关侧没有等价路由** —— 确实没有，但也不需要：直接打网站 API 就行。
 
-可选替代（未实现）：从 `/v1/me` 的 `login_checkin` 类型用量包 `created_at` 推断历史打卡
-日期，在面板展示"今日是否已打卡 / 连续天数"并跳转官网。
+现在的实现（`checkin.go`）：
+
+- **Cookie 存哪**：凭证文件旁的 sidecar（`<凭证路径>.checkin.json`，0600 权限，
+  写盘是 write+rename）。路径从 `host.auth.get` 返回的 `Path` 推导，因此随
+auth-dir 卷持久化、跟着凭证走。Cookie 只在进程内读写，管理路由和日志只回显
+`cookie_preview`（前 8 后 4 字符）。
+- **没有 Cookie 怎么办**：面板签到视图显示「需要登录」，提示用户用浏览器登录
+u1s1.io 后把 Cookie 粘贴进来。保存时插件先调网站 `/api/me` 验证：401 = 会话已
+失效，拒绝落盘。
+- **调度**：独立 goroutine（`startCheckinScheduler`，register 时启动一次，宿主
+  桥不可用或 `checkin-enabled: false` 时不启）。按北京时间（固定 UTC+8，无夏令
+  时）`08:00` / `20:00`（`checkin-times` 可配）各跑一轮。启动时若当日首档已过则
+  立即补一次——服务端按天去重（`claimed_today`），重复提交是无害的 no-op。
+- **去重**：每轮先 `GET /api/me` 看 `login_checkin.claimed_today`，已打卡则记为
+  `already` 不重复提交；未打卡才 POST claim。结果（ok / already / no_cookie /
+  error）写回 sidecar，面板展示。
+- **管理路由**：`checkin/status`（状态）、`checkin/cookie`（POST 设 / DELETE
+  清）、`checkin/run`（手动立即打卡）。
+
+为什么不自动登录网站：登录本身要人机验证（注册/登录链路里 capcat 是 `required`
+的，`requireCapToken()` 失败会抛错），且会话 Cookie 绑定浏览器指纹和风控上下文，
+服务端能识别异常的纯服务端登录。让用户自己登录一次、粘贴 Cookie 是唯一可靠的接
+入方式——之后自动签到就不再需要浏览器了。
+
+### 时区与计划时刻
+
+北京时间无夏令时，直接 `time.FixedZone("Asia/Shanghai", 8*3600)`，不依赖系统
+tzdata。`nextCheckinAfter` 返回严格晚于 now 的下一个 `HH:MM`；当天全过则取次日
+首档。计划时刻解析失败时回退默认 `08:00,20:00`，避免配置笔误静默停签。
 
 ---
 

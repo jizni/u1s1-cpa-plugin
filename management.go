@@ -80,6 +80,10 @@ func managementRegistration() managementRegistrationResponse {
 			{Method: http.MethodGet, Path: base + "/usage", Description: "u1s1 quota for all credentials: daily free allowance, balance, and packages."},
 			{Method: http.MethodPost, Path: base + "/refresh", Description: "Drop the cached quota snapshot and re-read /v1/me."},
 			{Method: http.MethodGet, Path: base + "/diagnostics", Description: "Recent upstream failures with their gateway request ids, for support reports."},
+			{Method: http.MethodGet, Path: base + "/checkin/status", Description: "Per-credential daily login check-in state: cookie presence and last run."},
+			{Method: http.MethodPost, Path: base + "/checkin/cookie", Description: "Validate and store a u1s1.io browser session cookie for one credential (body: auth_index + cookie)."},
+			{Method: http.MethodDelete, Path: base + "/checkin/cookie", Description: "Remove the stored check-in cookie for one credential (query: auth_index)."},
+			{Method: http.MethodPost, Path: base + "/checkin/run", Description: "Trigger an immediate check-in for one credential or all (query: auth_index)."},
 		},
 		Resources: []resourceRoute{
 			{Path: "/panel", Menu: "u1s1", Description: "u1s1 dashboard: free allowance, balance, and quota packages."},
@@ -382,6 +386,44 @@ func handleManagement(raw []byte) ([]byte, error) {
 			"client_version": activeConfig().ClientVersion,
 			"plugin_version": pluginVersion,
 		}))
+
+	// --- daily login check-in ------------------------------------------------
+	case req.Method == http.MethodGet && path == base+"/checkin/status":
+		status, errStatus := handleCheckinStatus()
+		if errStatus != nil {
+			return okEnvelope(jsonResponse(http.StatusBadGateway, map[string]any{"error": redactSecrets(errStatus.Error())}))
+		}
+		return okEnvelope(jsonResponse(http.StatusOK, status))
+
+	case req.Method == http.MethodPost && path == base+"/checkin/cookie":
+		var in struct {
+			AuthIndex string `json:"auth_index"`
+			Cookie    string `json:"cookie"`
+		}
+		_ = json.Unmarshal(req.Body, &in)
+		row, errSet := handleCheckinSetCookie(strings.TrimSpace(in.AuthIndex), in.Cookie, req.HostCallbackID)
+		if errSet != nil {
+			return okEnvelope(jsonResponse(http.StatusBadRequest, map[string]any{"error": redactSecrets(errSet.Error())}))
+		}
+		return okEnvelope(jsonResponse(http.StatusOK, row))
+
+	case req.Method == http.MethodDelete && path == base+"/checkin/cookie":
+		authIndex := strings.TrimSpace(req.Query.Get("auth_index"))
+		if authIndex == "" {
+			return okEnvelope(jsonResponse(http.StatusBadRequest, map[string]any{"error": "missing auth_index"}))
+		}
+		if errClear := handleCheckinClearCookie(authIndex); errClear != nil {
+			return okEnvelope(jsonResponse(http.StatusBadRequest, map[string]any{"error": redactSecrets(errClear.Error())}))
+		}
+		return okEnvelope(jsonResponse(http.StatusOK, map[string]any{"status": "ok"}))
+
+	case req.Method == http.MethodPost && path == base+"/checkin/run":
+		authIndex := strings.TrimSpace(req.Query.Get("auth_index"))
+		results, errRun := handleCheckinRun(authIndex, req.HostCallbackID)
+		if errRun != nil {
+			return okEnvelope(jsonResponse(http.StatusBadGateway, map[string]any{"error": redactSecrets(errRun.Error())}))
+		}
+		return okEnvelope(jsonResponse(http.StatusOK, map[string]any{"results": results}))
 
 	default:
 		return okEnvelope(jsonResponse(http.StatusNotFound, map[string]any{"error": "unknown route: " + path}))

@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -12,6 +13,10 @@ const (
 	providerName   = "u1s1"
 	defaultBaseURL = "https://api.u1s1.io/v1"
 	defaultClient  = "terminal"
+	// defaultWebOrigin is the website that hosts the dashboard API (/api/me,
+	// /api/packages/login-checkin/claim). It is a different host from the
+	// gateway (api.u1s1.io) and authenticates with browser session cookies.
+	defaultWebOrigin = "https://u1s1.io"
 	// Client version reported to the gateway; matches the installed u1s1 CLI
 	// (u1s1-cli 1.5.0). The gateway's integrity check tells users to "升级并重新
 	// 登录 u1s1", so this must track real CLI releases.
@@ -28,14 +33,25 @@ type pluginConfig struct {
 	Client        string `yaml:"client"`
 	ClientVersion string `yaml:"client-version"`
 	UserAgent     string `yaml:"user-agent"`
+	// WebOrigin is the website origin whose /api/* routes host the dashboard
+	// (login check-in claim). Defaults to https://u1s1.io.
+	WebOrigin string `yaml:"web-origin"`
+	// CheckinEnabled turns the daily login check-in scheduler on/off.
+	CheckinEnabled *bool `yaml:"checkin-enabled"`
+	// CheckinTimes is a comma-separated list of Beijing-time HH:MM slots at
+	// which the check-in runs (default "08:00,20:00").
+	CheckinTimes string `yaml:"checkin-times"`
 }
 
 func defaultPluginConfig() pluginConfig {
 	return pluginConfig{
-		BaseURL:       envOr("U1S1_BASE_URL", defaultBaseURL),
-		Client:        envOr("U1S1_CLIENT", defaultClient),
-		ClientVersion: envOr("U1S1_CLIENT_VERSION", defaultClientVersion),
-		UserAgent:     envOr("U1S1_USER_AGENT", defaultUserAgent),
+		BaseURL:        envOr("U1S1_BASE_URL", defaultBaseURL),
+		Client:         envOr("U1S1_CLIENT", defaultClient),
+		ClientVersion:  envOr("U1S1_CLIENT_VERSION", defaultClientVersion),
+		UserAgent:      envOr("U1S1_USER_AGENT", defaultUserAgent),
+		WebOrigin:      envOr("U1S1_WEB_ORIGIN", defaultWebOrigin),
+		CheckinEnabled: envBoolPtr("U1S1_CHECKIN_ENABLED", true),
+		CheckinTimes:   envOr("U1S1_CHECKIN_TIMES", defaultCheckinTimes),
 	}
 }
 
@@ -44,6 +60,21 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// envBoolPtr reads a boolean environment variable; absent or unparseable
+// values fall back to the default. A pointer keeps the zero value (false)
+// distinguishable from "unset" for the YAML merge path.
+func envBoolPtr(key string, fallback bool) *bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return boolPtr(fallback)
+	}
+	parsed, err := strconv.ParseBool(v)
+	if err != nil {
+		return boolPtr(fallback)
+	}
+	return boolPtr(parsed)
 }
 
 // apiOrigin strips the trailing /v1 from the base URL; auth routes hang off the origin root.
@@ -78,12 +109,30 @@ func applyRegistrationConfig(configYAML []byte) {
 	if v, ok := raw["user-agent"].(string); ok && strings.TrimSpace(v) != "" {
 		pluginCfg.UserAgent = strings.TrimSpace(v)
 	}
+	if v, ok := raw["web-origin"].(string); ok && strings.TrimSpace(v) != "" {
+		pluginCfg.WebOrigin = strings.TrimSpace(v)
+	}
+	if v, ok := raw["checkin-enabled"].(bool); ok {
+		pluginCfg.CheckinEnabled = boolPtr(v)
+	}
+	if v, ok := raw["checkin-times"].(string); ok && strings.TrimSpace(v) != "" {
+		pluginCfg.CheckinTimes = strings.TrimSpace(v)
+	}
 }
 
 func activeConfig() pluginConfig {
 	cfgMu.RLock()
 	defer cfgMu.RUnlock()
 	return pluginCfg
+}
+
+// webOrigin returns the website origin (for dashboard API routes), defaulting
+// to https://u1s1.io when the config leaves it empty.
+func (c pluginConfig) webOrigin() string {
+	if strings.TrimSpace(c.WebOrigin) != "" {
+		return strings.TrimSuffix(strings.TrimSpace(c.WebOrigin), "/")
+	}
+	return defaultWebOrigin
 }
 
 // pluginVersion is the plugin's own release version, reported in the
@@ -108,6 +157,9 @@ func registrationResponse() registration {
 				{Name: "client", Type: pluginapi.ConfigFieldTypeString, Description: "Value of the x-u1s1-client header (default terminal)."},
 				{Name: "client-version", Type: pluginapi.ConfigFieldTypeString, Description: "Value of the x-u1s1-version header (default 1.5.0)."},
 				{Name: "user-agent", Type: pluginapi.ConfigFieldTypeString, Description: "User-Agent sent upstream; the gateway checks the pi client fingerprint."},
+				{Name: "web-origin", Type: pluginapi.ConfigFieldTypeString, Description: "Website origin hosting the dashboard API (default https://u1s1.io)."},
+				{Name: "checkin-enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Run the daily login check-in scheduler (default true)."},
+				{Name: "checkin-times", Type: pluginapi.ConfigFieldTypeString, Description: "Beijing-time HH:MM slots for the check-in, comma-separated (default 08:00,20:00)."},
 			},
 		},
 		Capabilities: registrationCapability{

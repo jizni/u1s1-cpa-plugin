@@ -73,3 +73,11 @@ var (
 	diagMu   sync.Mutex
 	diagRing []diagnosticRecord
 )
+
+// --- daily login check-in scheduler (checkin.go) ---
+// checkinMu guards the once-only scheduler start; started flips true after the
+// loop goroutine is up so register/reconfigure cannot spawn a second loop.
+var (
+	checkinMu      sync.Mutex
+	checkinStarted bool
+)

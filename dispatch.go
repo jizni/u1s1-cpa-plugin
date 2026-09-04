@@ -54,6 +54,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 			_ = json.Unmarshal(request, &regReq)
 		}
 		applyRegistrationConfig(regReq.ConfigYAML)
+		startCheckinScheduler()
 		return okEnvelope(registrationResponse())
 
 	case pluginabi.MethodModelStatic:

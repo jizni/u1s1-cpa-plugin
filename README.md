@@ -39,7 +39,7 @@ u1s1 不接受普通 Bearer token。每个请求需要**四层**凭证同时成�
 | `auth_provider` | `auth.login.start`、`auth.login.poll`、`auth.parse`、`auth.refresh` | 浏览器设备登录；宿主负责把凭证持久化到 `auth-dir`。 |
 | `model_provider` | `model.for_auth` | 实时目录来自 `GET /v1/models`，缓存 5 分钟；每个模型带一行说明（免费包覆盖、相对默认模型的价格倍数、当前单价与峰/闲时段）。 |
 | `executor` | `executor.execute`、`executor.execute_stream`、`executor.count_tokens` | chat-completions 进出，流式经 `host.stream.emit`，本地估算 token 数。 |
-| `management_api` | `management.register`、`management.handle` | 额度面板加 JSON 路由（见下）。 |
+| `management_api` | `management.register`、`management.handle` | 额度面板加 JSON 路由（见下），含每日登录打卡的 Cookie 管理与手动签到。 |
 
 所有出站 HTTP 都走 `host.http.do` / `host.http.do_stream`，因此宿主的 `proxy-url`、
 传输策略和请求日志全部生效。上游报错原样转达，并在末尾附上
@@ -102,9 +102,12 @@ plugins:
 | `client` | `terminal` | `x-u1s1-client` 的值。 |
 | `client-version` | `1.5.0` | `x-u1s1-version` 的值；需与真实 CLI 发布版本保持一致。 |
 | `user-agent` | `pi (linux ...; x64)` | 必须保持 `pi (...)` 指纹。 |
+| `web-origin` | `https://u1s1.io` | 网站 origin：`/api/me`、打卡领取接口所在（与网关 `api.u1s1.io` 不同宿主，用会话 Cookie 鉴权）。 |
+| `checkin-enabled` | `true` | 是否运行每日打卡调度器。 |
+| `checkin-times` | `08:00,20:00` | 打卡的北京时间时刻，逗号分隔（`HH:MM`）。 |
 
 同名环境变量也生效：`U1S1_BASE_URL`、`U1S1_CLIENT`、`U1S1_CLIENT_VERSION`、
-`U1S1_USER_AGENT`。
+`U1S1_USER_AGENT`、`U1S1_WEB_ORIGIN`、`U1S1_CHECKIN_ENABLED`、`U1S1_CHECKIN_TIMES`。
 
 ## 登录
 
@@ -182,6 +185,12 @@ false` 的模型，`(off)` 会落到最低强度而不是被拒绝。不带后�
 请求编号。网关给每个失败请求都铸了一个 `request_id`，客服凭它直查日志；在此之前它
 只存在于那一次失败响应的错误文本里（也就是客户端的刷屏里）。记录只在内存，重启清空。
 
+「签到」按钮进入每日打卡视图：每个凭证一行，显示是否已设置网页会话 Cookie（只露
+前后几位）、上次打卡结果，以及一个 Cookie 输入框。「保存」会用网站 `/api/me` 验证
+Cookie 有效后落盘（存在凭证文件旁的 `<凭证名>.checkin.json`，随 auth-dir 卷持久化）；
+「立即签到」手动触发一次。「自动签到在北京时间 08:00 / 20:00（可配）运行，无 Cookie
+时跳过并在面板提示需要登录。
+
 JSON 路由（需要管理密钥）：
 
 | 方法 | 路径 | 用途 |
@@ -189,6 +198,10 @@ JSON 路由（需要管理密钥）：
 | GET | `/v0/management/plugins/u1s1/usage` | 所有 u1s1 凭证的额度；加 `?refresh=1` 跳过 30 秒缓存。 |
 | POST | `/v0/management/plugins/u1s1/refresh` | 强制重新读取 `/v1/me`，忽略缓存。 |
 | GET | `/v0/management/plugins/u1s1/diagnostics` | 最近 10 次上游失败的网关请求编号（报障用）。 |
+| GET | `/v0/management/plugins/u1s1/checkin/status` | 各凭证打卡状态：Cookie 是否已设、上次结果、下次运行时刻。 |
+| POST | `/v0/management/plugins/u1s1/checkin/cookie` | 校验并保存某凭证的网页会话 Cookie（body：`auth_index` + `cookie`）。 |
+| DELETE | `/v0/management/plugins/u1s1/checkin/cookie` | 清除某凭证的打卡 Cookie（query：`auth_index`）。 |
+| POST | `/v0/management/plugins/u1s1/checkin/run` | 立即打卡（query：`auth_index`，缺省=全部凭证）。 |
 
 资源页面本身不做管理鉴权（宿主契约），所以 HTML 里**不带**任何额度或凭证数据。它从
 `?key=`、`sessionStorage` 或控制台同源 `localStorage` 取管理密钥，再调用带鉴权的路由；

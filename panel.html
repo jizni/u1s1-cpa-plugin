@@ -134,6 +134,7 @@ code{background:var(--surface-muted);padding:1px 5px;border-radius:4px;font-size
   <div class="bar">
     <button id="reload">刷新</button>
     <button id="diag" class="sec">最近错误</button>
+    <button id="checkin" class="sec">签到</button>
     <span id="stamp" class="stamp" role="status" aria-live="polite"></span>
   </div>
   <div id="root"><p class="mut">加载中…</p></div>
@@ -408,6 +409,122 @@ async function loadDiagnostics() {
 
 document.getElementById("reload").onclick = () => load(true);
 document.getElementById("diag").onclick = () => loadDiagnostics();
+
+/* ---- daily login check-in -----------------------------------------------
+   The claim endpoint lives on the website and needs a browser session cookie,
+   which only the account owner can obtain (log in to u1s1.io, copy the
+   Cookie). The plugin stores it next to the credential and claims twice a day
+   at the configured Beijing-time slots. Without a cookie the panel shows a
+   login prompt; with one it shows the last result and offers a manual run.
+   ------------------------------------------------------------------------ */
+const CHECKIN_URL = "https://u1s1.io/dashboard";
+
+function renderCheckin(data) {
+  const runTag = s => ({
+    ok: ["已打卡", "tag"],
+    already: ["今日已打", "tag"],
+    no_cookie: ["未设置 Cookie", "tag off"],
+    error: ["失败", "tag off"],
+  }[s] || [s || "—", "tag"]);
+  const cards = (data.accounts || []).map(a => {
+    const [stLabel, stCls] = runTag(a.last_run ? a.last_run.status : "no_cookie");
+    const last = a.last_run
+      ? `${localTime(a.last_run.at)} · ${esc(a.last_run.message || "")}`
+      : "从未运行";
+    const needsLogin = a.needs_login || !a.cookie_set;
+    return `<div class="card">
+      <div class="acct-head">
+        <span class="acct-email">${esc(a.email || a.name)}</span>
+        ${needsLogin ? '<span class="tag off">需要登录</span>' : '<span class="tag">Cookie 已设置</span>'}
+        <span class="tag ${stCls}">${stLabel}</span>
+        <span class="mut">${esc(a.name)}</span>
+      </div>
+      ${needsLogin
+        ? `<div class="hint">还没有网页会话 Cookie。用浏览器登录 <a href="${CHECKIN_URL}" target="_blank" rel="noopener noreferrer">u1s1.io</a> 后，把 Cookie 值粘贴到下方并保存；保存时插件会用 /api/me 验证有效性。</div>`
+        : `<div class="note">Cookie ${esc(a.cookie_hint || "")} · 最近 ${last}</div>`}
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <input data-checkin-cookie="${esc(a.auth_index)}" type="password" placeholder="粘贴浏览器 Cookie（可留空=沿用已保存的）" autocomplete="off"
+               style="flex:1;min-width:220px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--input-bg);color:var(--fg)">
+        <button data-checkin-save="${esc(a.auth_index)}" class="sec">保存</button>
+        <button data-checkin-run="${esc(a.auth_index)}">立即签到</button>
+        ${a.cookie_set ? `<button data-checkin-clear="${esc(a.auth_index)}" class="sec">清除</button>` : ""}
+      </div>
+      <div class="note">每天可领 200 万 Token 全模型加量包（30 天有效）。自动签到在北京时间 ${esc(data.times || "—")} 执行${data.next_run ? `，下次 ${localTime(data.next_run)}` : ""}。</div>
+    </div>`;
+  }).join("");
+  if (!cards) return '<div class="card"><div class="mut">没有 u1s1 凭证。</div></div>';
+  return `<div class="card">
+    <div class="acct-head"><span class="acct-email">每日登录打卡</span>
+      <span class="mut">${data.enabled ? "自动签到已开启" : "自动签到已关闭（配置 checkin-enabled: false）"} · 站点 ${esc(data.web_origin || "")}</span></div>
+  </div>` + cards;
+}
+
+async function loadCheckin() {
+  if (loading) return;
+  loading = true;
+  const root = document.getElementById("root");
+  const btn = document.getElementById("checkin");
+  const label = btn.textContent;
+  btn.textContent = "读取中…";
+  btn.disabled = true;
+  try {
+    const data = await callAPI("/plugins/u1s1/checkin/status");
+    root.innerHTML = renderCheckin(data);
+    document.getElementById("stamp").textContent = "签到 · 点「刷新」回到额度";
+    bindCheckinActions();
+  } catch (e) {
+    if (e.needKey) renderLogin(e.message === "missing management key" ? "" : e.message);
+    else root.innerHTML = `<div class="card err">加载失败：${esc(e.message)}</div>`;
+  } finally {
+    loading = false;
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+function bindCheckinActions() {
+  const root = document.getElementById("root");
+  const flash = (btn, text) => { const old = btn.textContent; btn.textContent = text; btn.disabled = true; setTimeout(() => { btn.textContent = old; btn.disabled = false; }, 2000); };
+  root.querySelectorAll("[data-checkin-save]").forEach(btn => {
+    btn.onclick = async () => {
+      const ai = btn.getAttribute("data-checkin-save");
+      const input = root.querySelector(`[data-checkin-cookie="${ai}"]`);
+      const cookie = input ? input.value.trim() : "";
+      if (!cookie) { flash(btn, "先粘贴 Cookie"); return; }
+      flash(btn, "验证中…");
+      try {
+        await callAPI("/plugins/u1s1/checkin/cookie", { method: "POST", body: JSON.stringify({ auth_index: ai, cookie }) });
+        loadCheckin();
+      } catch (e) {
+        flash(btn, e.message);
+      }
+    };
+  });
+  root.querySelectorAll("[data-checkin-clear]").forEach(btn => {
+    btn.onclick = async () => {
+      const ai = btn.getAttribute("data-checkin-clear");
+      flash(btn, "清除中…");
+      try {
+        await callAPI("/plugins/u1s1/checkin/cookie?auth_index=" + encodeURIComponent(ai), { method: "DELETE" });
+        loadCheckin();
+      } catch (e) { flash(btn, e.message); }
+    };
+  });
+  root.querySelectorAll("[data-checkin-run]").forEach(btn => {
+    btn.onclick = async () => {
+      const ai = btn.getAttribute("data-checkin-run");
+      flash(btn, "签到中…");
+      try {
+        const data = await callAPI("/plugins/u1s1/checkin/run?auth_index=" + encodeURIComponent(ai), { method: "POST" });
+        const r = (data.results || [])[0];
+        flash(btn, r ? (r.message || r.status) : "完成");
+        setTimeout(loadCheckin, 1500);
+      } catch (e) { flash(btn, e.message); }
+    };
+  });
+}
+
+document.getElementById("checkin").onclick = () => loadCheckin();
 if (window.__u1s1ThemeSync) window.__u1s1ThemeSync();
 load();
 </script>
