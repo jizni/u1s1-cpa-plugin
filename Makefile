@@ -15,6 +15,11 @@ LDFLAGS  := -s -w
 # a release checkout produces a versioned plugin without extra arguments.
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev)
 
+# glibc-check.sh holds the single target-glibc constant (2.36 = Debian 12,
+# matching the CPA container) and does a version-ordered comparison; see
+# scripts/glibc-check.sh for why the check must be <=, not an equality list.
+GLIBC_CHECK := scripts/glibc-check.sh
+
 .PHONY: all build test vet race ci clean glibc-check
 
 all: build
@@ -42,13 +47,7 @@ ci: build test race vet
 # container provides (Debian 12 / glibc 2.36). Run with GLIBC_SO=<path>.
 GLIBC_SO ?= $(PLUGIN)
 glibc-check:
-	@max=$$(objdump -T $(GLIBC_SO) | grep 'GLIBC_' | sed -E 's/.*GLIBC_([0-9.]+).*/\1/' | sort -Vu | tail -1); \
-	echo "max glibc symbol: GLIBC_$$max (container is glibc 2.36)"; \
-	if [ "$$max" = "2.36" ] || [ "$$max" = "2.35" ] || [ "$$max" = "2.34" ]; then \
-		echo "OK: within container glibc"; \
-	else \
-		echo "WARNING: verify compatibility manually"; \
-	fi
+	@GLIBC_SO=$(GLIBC_SO) $(GLIBC_CHECK)
 
 clean:
 	rm -rf $(DIST)

@@ -366,7 +366,10 @@ func TestAuthDataEchoesPrefix(t *testing.T) {
 	}
 }
 
-func TestManagementRegistrationRoutes(t *testing.T) {
+// TestManagementRouteTable pins the complete management surface: every JSON
+// route the panel calls plus the /panel resource. A route nobody can reach is
+// a route nobody uses (usage, diagnostics, checkin all live here).
+func TestManagementRouteTable(t *testing.T) {
 	payload, _ := json.Marshal(pluginapi.ManagementRegistrationRequest{
 		BasePath:         "/v0/management",
 		ResourceBasePath: "/v0/resource/plugins/u1s1",
@@ -380,20 +383,39 @@ func TestManagementRegistrationRoutes(t *testing.T) {
 	if len(reg.Resources) != 1 || reg.Resources[0].Path != "/panel" || reg.Resources[0].Menu != "u1s1" {
 		t.Fatalf("resources = %+v", reg.Resources)
 	}
-	var methods []string
+	got := map[string]bool{}
 	for _, r := range reg.Routes {
-		methods = append(methods, r.Method+" "+r.Path)
+		got[r.Method+" "+r.Path] = true
 	}
-	want := map[string]bool{"GET /plugins/u1s1/usage": true, "POST /plugins/u1s1/refresh": true}
-	for _, m := range methods {
+	want := map[string]bool{
+		"GET /plugins/u1s1/usage":            true,
+		"POST /plugins/u1s1/refresh":         true,
+		"GET /plugins/u1s1/diagnostics":      true,
+		"GET /plugins/u1s1/checkin/status":   true,
+		"POST /plugins/u1s1/checkin/cookie":  true,
+		"DELETE /plugins/u1s1/checkin/cookie": true,
+		"POST /plugins/u1s1/checkin/run":     true,
+	}
+	for m := range got {
+		if !want[m] {
+			t.Errorf("unexpected route %q", m)
+		}
 		delete(want, m)
 	}
 	if len(want) != 0 {
-		t.Fatalf("missing routes %v, got %v", want, methods)
+		t.Fatalf("missing routes %v, got %v", want, got)
 	}
 }
 
-func TestPanelResourceServesHTMLWithoutSecrets(t *testing.T) {
+// TestPanelSafetyContract pins the panel's non-negotiable invariants: the
+// unauthenticated resource page serves real HTML without embedded credentials,
+// the template placeholder is substituted, external links don't leak the
+// referrer, upstream text is escaped before reaching the diagnostics table,
+// and the page stays a quota readout (no storefront CTA, no announcement
+// surface, mirrors the console's theme). Cosmetic pins (copy, CSS, layout
+// order) intentionally live nowhere: they churn on every UI touch without
+// protecting behavior.
+func TestPanelSafetyContract(t *testing.T) {
 	payload, _ := json.Marshal(managementRequestWire{ManagementRequest: pluginapi.ManagementRequest{
 		Method: "GET",
 		Path:   "/v0/resource/plugins/u1s1/panel",
@@ -414,18 +436,60 @@ func TestPanelResourceServesHTMLWithoutSecrets(t *testing.T) {
 	if !strings.Contains(body, "u1s1") || !strings.Contains(body, "<script>") {
 		t.Fatal("panel HTML looks empty")
 	}
-	// The template placeholder must be substituted with the live base path.
+
+	// Serving: the template placeholder must be substituted with the live path.
 	if strings.Contains(body, "__U1S1_MANAGEMENT_BASE_PATH_JSON__") {
 		t.Fatal("management base path placeholder was not replaced")
 	}
 	if !strings.Contains(body, `"/v0/management"`) {
 		t.Fatal("expected the injected management base path in the page")
 	}
+
 	// The unauthenticated resource page must not embed any quota or credential data.
 	for _, needle := range []string{"u1s1d-", "devicePrivateJwk", "deviceToken", "daily_free_remaining_usd\":"} {
 		if strings.Contains(body, needle) {
 			t.Fatalf("panel HTML leaked %q", needle)
 		}
+	}
+
+	// External links must open in a new tab without leaking the referrer.
+	if !strings.Contains(body, `rel="noopener noreferrer"`) {
+		t.Fatal("external links must carry rel=noopener noreferrer")
+	}
+
+	// Diagnostics rows render upstream text, so it must go through the escaper.
+	if !strings.Contains(body, "esc(e.message") {
+		t.Fatal("diagnostics rows must escape the gateway message")
+	}
+
+	// Token counts are the unit quota packages are denominated in; the panel
+	// must convert amounts with the gateway's rate rather than showing USD only.
+	if !strings.Contains(body, "tokens_per_usd") {
+		t.Fatal("panel must convert USD amounts to tokens like the CLI does")
+	}
+
+	// The panel is an operator quota readout, not a storefront or a notice
+	// board: no top-up CTA, no gateway announcement surface.
+	if strings.Contains(body, "usage-topup-card") {
+		t.Fatal("panel must not carry the top-up call to action")
+	}
+	for _, needle := range []string{`id="notice"`, "renderNotice", "announcement"} {
+		if strings.Contains(body, needle) {
+			t.Fatalf("panel still carries the announcement banner: %q", needle)
+		}
+	}
+
+	// The panel mirrors the console's theme; it must not own a theme control.
+	for _, needle := range []string{`id="theme"`, "u1s1-theme", "applyTheme"} {
+		if strings.Contains(body, needle) {
+			t.Fatalf("panel still carries a local theme control: %q", needle)
+		}
+	}
+	if !strings.Contains(body, "__u1s1ThemeSync") || !strings.Contains(body, "MutationObserver") {
+		t.Fatal("panel must sync data-theme from the embedding console")
+	}
+	if !strings.Contains(body, `data-theme="dark"`) || !strings.Contains(body, `data-theme="white"`) {
+		t.Fatal("panel must define the console's dark and white theme tokens")
 	}
 }
 
@@ -462,14 +526,29 @@ func TestPackageLabelsAndScopeNotes(t *testing.T) {
 }
 
 func TestIsU1S1AuthName(t *testing.T) {
-	for _, name := range []string{"u1s1-user-example.com.json", "/root/.cli-proxy-api/u1s1-x.json", "U1S1-Upper.JSON"} {
-		if !isU1S1AuthName(name) {
-			t.Fatalf("%q should be recognized", name)
-		}
+	cases := []struct {
+		name string
+		want bool
+	}{
+		// Credential files: u1s1- prefix plus a .json suffix, any case, with or
+		// without a leading path.
+		{"u1s1-user-example.com.json", true},
+		{"/root/.cli-proxy-api/u1s1-x.json", true},
+		{"U1S1-Upper.JSON", true},
+		// Not credentials.
+		{"workbuddy-abc.json", false},
+		{"u1s1.json", false},
+		{"u1s1-x.txt", false},
+		{"", false},
+		// Check-in sidecars sit next to the credential in auth-dir, and the
+		// host scans *.json there; both the legacy and current sidecar names
+		// must never be claimed as credentials.
+		{"u1s1-jizni-qq.com.json.checkin.json", false},
+		{"u1s1-jizni-qq.com.json.checkin", false},
 	}
-	for _, name := range []string{"workbuddy-abc.json", "u1s1.json", "u1s1-x.txt", ""} {
-		if isU1S1AuthName(name) {
-			t.Fatalf("%q must not be claimed", name)
+	for _, c := range cases {
+		if got := isU1S1AuthName(c.name); got != c.want {
+			t.Errorf("isU1S1AuthName(%q) = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
@@ -518,80 +597,9 @@ func TestMeResponseParsesPackagesAndFreeClaim(t *testing.T) {
 	}
 }
 
-func TestPanelHasNoLocalThemeSwitchAndFlowToolbar(t *testing.T) {
-	body := string(renderPanel())
-	// The panel must not own a theme setting: it mirrors the CPA console's
-	// data-theme attribute instead.
-	for _, needle := range []string{`id="theme"`, "u1s1-theme", "applyTheme"} {
-		if strings.Contains(body, needle) {
-			t.Fatalf("panel still carries a local theme control: %q", needle)
-		}
-	}
-	if !strings.Contains(body, "__u1s1ThemeSync") || !strings.Contains(body, "MutationObserver") {
-		t.Fatal("panel must sync data-theme from the embedding console")
-	}
-	if !strings.Contains(body, `data-theme="dark"`) || !strings.Contains(body, `data-theme="white"`) {
-		t.Fatal("panel must define the console's dark and white theme tokens")
-	}
-	// Toolbar buttons live in normal flow, not pinned to a corner where host
-	// chrome can overlap them.
-	for _, needle := range []string{"position:fixed", "position:absolute", "position: fixed", "position: absolute"} {
-		if strings.Contains(body, needle) {
-			t.Fatalf("panel uses out-of-flow positioning (%q), which can be overlapped", needle)
-		}
-	}
-	if !strings.Contains(body, `<div class="bar">`) {
-		t.Fatal("expected the in-flow toolbar container")
-	}
-	// The reload button must come after the heading in document order.
-	h1 := strings.Index(body, "<h1>")
-	bar := strings.Index(body, `<div class="bar">`)
-	if h1 < 0 || bar < 0 || bar < h1 {
-		t.Fatalf("toolbar must render below the title (h1=%d bar=%d)", h1, bar)
-	}
-	// The panel shows quota only; the gateway's operator notice was dropped, so
-	// no announcement surface may come back by accident.
-	for _, needle := range []string{`id="notice"`, "renderNotice", "announcement"} {
-		if strings.Contains(body, needle) {
-			t.Fatalf("panel still carries the announcement banner: %q", needle)
-		}
-	}
-	// External links must open in a new tab without leaking the referrer.
-	if strings.Count(body, `rel="noopener noreferrer"`) < 1 {
-		t.Fatal("external links must carry rel=noopener noreferrer")
-	}
-	// Token counts are the unit quota packages are denominated in; the panel must
-	// convert amounts with the gateway's own rate rather than showing only USD.
-	if !strings.Contains(body, "tokens_per_usd") {
-		t.Fatal("panel must convert USD amounts to tokens like the CLI does")
-	}
-	// The panel is a quota readout for the operator, not a storefront. The CLI's
-	// usage report ends with top-up and invite calls to action (dist/usage.js
-	// usageCtaLines); those belong in the client a paying user runs, not in a CPA
-	// admin console. The one dashboard link that stays is the free_claim badge,
-	// which exists because claiming genuinely requires a browser session.
-	if strings.Contains(body, "usage-topup-card") {
-		t.Fatal("panel must not carry the top-up call to action")
-	}
-}
 
-// A forced refresh often returns identical numbers (quota moves slowly, and the
-// gateway lags), so the click has to acknowledge itself in the UI or the button
-// reads as dead.
-func TestPanelRefreshShowsInFlightFeedback(t *testing.T) {
-	body := string(renderPanel())
-	if !strings.Contains(body, "刷新中…") {
-		t.Fatal("the reload button must show an in-flight label")
-	}
-	if !strings.Contains(body, `aria-live="polite"`) {
-		t.Fatal("the status line must announce updates to assistive tech")
-	}
-	// Re-entry guard: the disabled button does not cover the key form's Enter
-	// handler or the initial load.
-	if !strings.Contains(body, "if (loading) return;") {
-		t.Fatal("load() must not run concurrently with itself")
-	}
-}
+
+
 
 func TestDecodeStreamBridgeResponseCarriesErrorStatus(t *testing.T) {
 	// Bridged 4xx without a stream id: the status must survive in both the

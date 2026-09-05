@@ -45,7 +45,7 @@ u1s1 不接受普通 Bearer token。每个请求需要**四层**凭证同时成�
 传输策略和请求日志全部生效。上游报错原样转达，并在末尾附上
 `(HTTP 429 · insufficient_quota · 请求编号 …)`。
 
-与宿主的调用交互细节（cgo ABI、panic 屏障、文件职责）见 DEVELOPMENT.md §2。
+与宿主的调用交互细节（cgo ABI、panic 屏障）见 DEVELOPMENT.md §2；各文件职责见各文件头注释。
 
 ## 构建
 
@@ -73,9 +73,10 @@ git tag v0.2.0 && git push origin v0.2.0
 GitHub Actions 的 [Release](.github/workflows/release.yml) 流水线会构建 `u1s1.so`、校验
 glibc 兼容性（≤ 2.36）、跑单测，然后把 `u1s1.so` 和 `u1s1.so.sha256` 挂到 Release 资产上。
 
-注意：构建机的 glibc 不能比 CPA 容器的新（本构建目标为 glibc ≤ 2.34；官方镜像为
-Debian 12 / glibc 2.36）。换构建机时用
-`objdump -T dist/u1s1.so | grep GLIBC_ | sort -uV | tail -1` 确认。
+注意：构建机的 glibc 不能比 CPA 容器的新（官方镜像为 Debian 12 / glibc 2.36；目标常量统一
+在 `scripts/glibc-check.sh`，比较是 `sort -V` 版本序：只要 ≤ 2.36 就通过，更老更兼容的构建
+不会误杀）。`make build` 已自动跑 `make glibc-check`；换构建机后也可单独
+`GLIBC_SO=<path> scripts/glibc-check.sh` 确认。
 
 ## 安装
 

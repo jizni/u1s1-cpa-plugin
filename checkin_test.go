@@ -95,7 +95,10 @@ func TestNextCheckinAfterBeijingSlots(t *testing.T) {
 	}
 }
 
-func TestCookiePreviewMasksSecret(t *testing.T) {
+// TestCookiePreviewMasksAndIsRuneSafe pins the preview contract: the secret
+// never surfaces (short or long), and a multi-byte value is never sliced
+// mid-rune into invalid UTF-8.
+func TestCookiePreviewMasksAndIsRuneSafe(t *testing.T) {
 	if got := cookiePreview(""); got != "" {
 		t.Fatalf("empty preview = %q", got)
 	}
@@ -105,6 +108,14 @@ func TestCookiePreviewMasksSecret(t *testing.T) {
 	got := cookiePreview("session=0123456789abcdefsecretvalue")
 	if strings.Contains(got, "0123456789abcdefsecretvalue") || !strings.HasPrefix(got, "session=") {
 		t.Fatalf("preview leaked the secret: %q", got)
+	}
+	long := "u1s1_session=" + strings.Repeat("字", 20) + "abc1234"
+	got = cookiePreview(long)
+	if !utf8.ValidString(got) {
+		t.Fatalf("preview produced invalid UTF-8: %q", got)
+	}
+	if strings.Contains(got, "abc1234") {
+		t.Fatalf("preview leaked the tail: %q", got)
 	}
 }
 
@@ -150,19 +161,6 @@ func TestCorruptSidecarAutoResets(t *testing.T) {
 	// The file is writable again after the reset.
 	if err := saveCheckinSidecar(path, &checkinSidecar{Cookie: "session=ok"}); err != nil {
 		t.Fatalf("save after reset error = %v", err)
-	}
-}
-
-// TestCookiePreviewRuneSafe pins the P3 fix: preview must not slice mid-rune
-// and must never leak the full secret.
-func TestCookiePreviewRuneSafe(t *testing.T) {
-	long := "u1s1_session=" + strings.Repeat("字", 20) + "abc1234"
-	got := cookiePreview(long)
-	if !utf8.ValidString(got) {
-		t.Fatalf("preview produced invalid UTF-8: %q", got)
-	}
-	if strings.Contains(got, "abc1234") {
-		t.Fatalf("preview leaked the tail: %q", got)
 	}
 }
 
@@ -269,20 +267,7 @@ func TestCheckinSidecarMigratesLegacyJSON(t *testing.T) {
 	}
 }
 
-// TestIsU1S1AuthNameRejectsCheckinSidecar pins the root-cause fix: the host
-// scans auth-dir for *.json and the legacy sidecar name looked like a
-// credential; both the legacy and current names must be excluded.
-func TestIsU1S1AuthNameRejectsCheckinSidecar(t *testing.T) {
-	if isU1S1AuthName("u1s1-jizni-qq.com.json.checkin.json") {
-		t.Fatal("legacy sidecar name must not be treated as a u1s1 credential")
-	}
-	if isU1S1AuthName("u1s1-jizni-qq.com.json.checkin") {
-		t.Fatal("current sidecar name must not be treated as a u1s1 credential")
-	}
-	if !isU1S1AuthName("u1s1-jizni-qq.com.json") {
-		t.Fatal("real credential name must still be recognized")
-	}
-}
+// TestCheckinStatusEndpointRejectsMissingKey exercises the management route's
 
 // checkinWebHandler fakes the website /api routes: /api/me reports claimed_today
 // and /api/packages/login-checkin/claim records the request and returns success.
@@ -420,28 +405,6 @@ func TestCheckinEnabledDefaultAndToggle(t *testing.T) {
 	cfgMu.Lock()
 	pluginCfg = defaultPluginConfig()
 	cfgMu.Unlock()
-}
-
-func TestCheckinRoutesRegistered(t *testing.T) {
-	raw, err := handleMethod(pluginabi.MethodManagementRegister, []byte(`{"base_path":"/v0/management","resource_base_path":"/v0/resource/plugins/u1s1"}`))
-	if err != nil {
-		t.Fatalf("management.register error = %v", err)
-	}
-	var reg managementRegistrationResponse
-	unwrapResult(t, raw, &reg)
-	found := map[string]bool{}
-	for _, r := range reg.Routes {
-		found[r.Path] = true
-	}
-	for _, want := range []string{
-		"/plugins/u1s1/checkin/status",
-		"/plugins/u1s1/checkin/cookie",
-		"/plugins/u1s1/checkin/run",
-	} {
-		if !found[want] {
-			t.Errorf("route %q not registered", want)
-		}
-	}
 }
 
 // TestCheckinStatusEndpointRejectsMissingKey exercises the management route's

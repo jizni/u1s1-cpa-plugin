@@ -61,9 +61,8 @@ func TestDispatchMethodRedactsHandlerErrors(t *testing.T) {
 	if env.OK || env.Error == nil || env.Error.Code != "plugin_error" {
 		t.Fatalf("envelope = %+v, want a plugin_error", env)
 	}
-	if strings.Contains(out2str(out), secret) {
+	if strings.Contains(string(out), secret) {
 		t.Fatalf("plugin_error leaked the device token: %s", out)
 	}
 }
 
-func out2str(b []byte) string { return string(b) }

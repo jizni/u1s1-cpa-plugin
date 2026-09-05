@@ -147,7 +147,8 @@ func TestDiagnosticsRouteReturnsRecords(t *testing.T) {
 	}
 }
 
-// The route is registered, otherwise the host never routes to it.
+// (diagnostics render-time panel invariants live in TestPanelSafetyContract,
+// plugin_test.go; the route itself is pinned above.)
 func TestDiagnosticsRouteIsRegistered(t *testing.T) {
 	found := false
 	for _, route := range managementRegistration().Routes {
@@ -160,17 +161,3 @@ func TestDiagnosticsRouteIsRegistered(t *testing.T) {
 	}
 }
 
-// The panel must offer the ids to the operator; a route nobody can reach is a
-// route nobody uses.
-func TestPanelExposesDiagnostics(t *testing.T) {
-	body := string(renderPanel())
-	for _, needle := range []string{`id="diag"`, "/plugins/u1s1/diagnostics", "请求编号"} {
-		if !strings.Contains(body, needle) {
-			t.Fatalf("panel does not surface diagnostics: missing %q", needle)
-		}
-	}
-	// Upstream text reaches this table, so it must go through the escaper.
-	if !strings.Contains(body, "esc(e.message") {
-		t.Fatal("diagnostics rows must escape the gateway message")
-	}
-}

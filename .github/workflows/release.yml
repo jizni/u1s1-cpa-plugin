@@ -9,17 +9,27 @@ permissions:
 
 jobs:
   release:
-    # ubuntu-22.04 (glibc 2.35) rather than ubuntu-latest (24.04 / glibc 2.39):
-    # the CPA container is Debian 12 / glibc 2.36, and the plugin must not
-    # require newer glibc symbols than the container provides.
+    # Build inside a Debian 12 container: its glibc 2.36 matches the CPA
+    # container exactly, so the artifact can never require newer symbols than
+    # the target provides. The old ubuntu-22.04 runner pin (glibc 2.35 build
+    # host) hit GitHub's deprecation window (unsupported from 2026-09-17); the
+    # container approach is runner-agnostic and will survive any image swap.
     #
-    # This image is on GitHub's deprecation path (starts 2026-09-17, fully
-    # unsupported 2027-04-17). It cannot simply move to ubuntu-latest: the
-    # glibc check below would fail. When it is retired, either build in a
-    # Debian 12 container on a newer runner, or verify that the CPA image has
-    # moved to a newer glibc.
-    runs-on: ubuntu-22.04
+    # The glibc gate in scripts/glibc-check.sh still runs afterwards: a
+    # version-ordered <= comparison that also accepts more-compatible builds
+    # (glibc < 2.36) instead of an equality whitelist.
+    runs-on: ubuntu-latest
+    container:
+      # node:22-bookworm = Debian 12 (glibc 2.36, identical to the CPA
+      # container) plus the Node runtime the checkout/setup-go JS actions
+      # need inside a container job.
+      image: node:22-bookworm
     steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates binutils
+
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
@@ -35,13 +45,7 @@ jobs:
             -o dist/u1s1.so .
 
       - name: Verify glibc compatibility (must be ≤ 2.36)
-        run: |
-          max=$(objdump -T dist/u1s1.so | grep 'GLIBC_' | sed -E 's/.*GLIBC_([0-9.]+).*/\1/' | sort -Vu | tail -1)
-          echo "max glibc symbol: GLIBC_$max"
-          case "$max" in
-            2.34|2.35|2.36) ;;
-            *) echo "::error::plugin requires GLIBC_$max, container is 2.36"; exit 1 ;;
-          esac
+        run: scripts/glibc-check.sh
 
       - name: Run unit tests
         run: go test ./...
