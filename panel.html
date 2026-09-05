@@ -73,6 +73,8 @@ tbody tr:last-child td{border-bottom:none}
 .bar-track.low>i{background:var(--warn)}
 .bar-track.crit>i{background:var(--err)}
 .note{font-size:11px;color:var(--mut);margin-top:3px}
+.usage-package-count{font-size:11px;color:var(--mut);border:1px solid var(--border);border-radius:999px;padding:0 6px;margin-left:4px;vertical-align:middle}
+.usage-package-note{color:var(--mut);padding-top:0}
 .err{color:var(--err)}
 .tag.claim{color:var(--ok);border-color:var(--ok);background:transparent}
 .login{max-width:440px}
@@ -130,7 +132,7 @@ code{background:var(--surface-muted);padding:1px 5px;border-radius:4px;font-size
 <body>
 <div class="wrap">
   <h1>u1s1 额度</h1>
-  <div class="sub">今日免费额度 · 永久余额 · 用量包明细（与 <code>u1s1 usage</code> 一致）</div>
+  <div class="sub">今日免费额度 · 余额(按量) · 用量包明细（与 <code>u1s1 usage</code> 一致）</div>
   <div class="bar">
     <button id="reload">刷新</button>
     <button id="diag" class="sec">最近错误</button>
@@ -220,6 +222,18 @@ function moneyCell(a, amount) {
     : { value: usd(amount), note: "" };
 }
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// Mirrors the dashboard's mergePkgs expiry presentation: a single expiry date
+// renders plainly; a group with several shows the earliest plus a note that
+// the rest expire in batches (or never).
+function packageExpiryText(p) {
+  const dates = [...(p.expiry_dates || [])].sort();
+  if (dates.length === 0) return "永不过期";
+  const first = dates[0].slice(0, 10);
+  if (dates.length === 1 && !p.has_never_expiring) return first + " 到期";
+  return p.has_never_expiring
+    ? `最早 ${first} 到期 · 含永不过期额度`
+    : `最早 ${first} 到期 · 分批到期`;
+}
 function localTime(s) {
   if (!s) return "—";
   const d = new Date(s.includes("T") ? s : s.replace(" ", "T") + "Z");
@@ -279,18 +293,22 @@ function renderAccount(a) {
   const rows = (a.packages || []).map(p => {
     const cap = p.daily_tokens || p.total_tokens || 0;
     const capLabel = p.daily_tokens ? tokens(p.daily_tokens) + " / 天" : p.total_tokens ? tokens(p.total_tokens) : "—";
+    const countBadge = (p.count || 1) > 1 ? ` <span class="usage-package-count">× ${p.count}</span>` : "";
+    const grantNote = p.kind === "admin_grant" && String(p.note || "").trim()
+      ? `<tr><td colspan="5" class="note usage-package-note">${esc(String(p.note).trim())}</td></tr>`
+      : "";
     return `<tr>
-      <td>${esc(p.kind_label)}<div class="note">${esc(p.scope_note)}</div></td>
+      <td>${esc(p.kind_label)}${countBadge}<div class="note">${esc(p.scope_note)}</div></td>
       <td class="num">${tokens(p.remaining)}${meter(p.remaining, cap)}</td>
       <td class="num">${capLabel}</td>
       <td class="num">${tokens(p.used_today)}</td>
-      <td>${p.expires_at ? localTime(p.expires_at) : "永不过期"}</td>
-    </tr>`;
+      <td>${packageExpiryText(p)}</td>
+    </tr>` + grantNote;
   }).join("");
 
   const freePct = a.daily_free_usd > 0 ? a.daily_free_remaining_usd / a.daily_free_usd * 100 : 0;
   const free = moneyCell(a, a.daily_free_remaining_usd);
-  const balance = moneyCell(a, a.remaining_usd);
+  const balance = moneyCell(a, a.bonus_balance_usd);
   const monthly = moneyCell(a, a.mtd_usd);
   // A claimable free package is only claimable on the website: the claim endpoint
   // needs a browser session plus two captchas, so link there instead of a button.
@@ -309,7 +327,7 @@ function renderAccount(a) {
       <div class="kv"><div class="k">今日免费剩余</div><div class="v">${free.value}</div>
         ${meter(a.daily_free_remaining_usd, a.daily_free_usd)}
         <div class="note">共 ${usd(a.daily_free_usd)} · ${freePct.toFixed(1)}%</div></div>
-      <div class="kv"><div class="k">永久余额</div><div class="v">${balance.value}</div>
+      <div class="kv"><div class="k">余额(按量)</div><div class="v">${balance.value}</div>
         <div class="note">${[balance.note, a.bonus_balance_usd ? `含赠送 ${usd(a.bonus_balance_usd)}` : ""].filter(Boolean).join(" · ")}</div></div>
       <div class="kv"><div class="k">本月已用</div><div class="v">${monthly.value}</div>
         ${monthly.note ? `<div class="note">${monthly.note}</div>` : ""}</div>

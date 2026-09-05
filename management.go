@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -119,10 +121,14 @@ type accountUsage struct {
 	DailyFreeRemainingUSD float64 `json:"daily_free_remaining_usd"`
 	DailyFreeResetsAt     string  `json:"daily_free_resets_at"`
 	DailyFreeModel        string  `json:"daily_free_model"`
-	RemainingUSD          float64 `json:"remaining_usd"`
-	BonusBalanceUSD       float64 `json:"bonus_balance_usd"`
-	MTDUSD                float64 `json:"mtd_usd"`
-	TokensPerUSD          float64 `json:"tokens_per_usd"`
+	// RemainingUSD is the gateway's USD conversion of the account's remaining
+	// package tokens. The dashboard does not show it (its balance metric is
+	// bonus_balance_usd), so the panel no longer renders it as a balance; the
+	// field stays in the JSON for anyone scripting the route.
+	RemainingUSD    float64 `json:"remaining_usd"`
+	BonusBalanceUSD float64 `json:"bonus_balance_usd"`
+	MTDUSD          float64 `json:"mtd_usd"`
+	TokensPerUSD    float64 `json:"tokens_per_usd"`
 	// FreeClaim is "first" or "renew" when a free quota package is waiting to be
 	// claimed on the website. The claim itself needs a browser session plus two
 	// captchas, so the panel can only point the user there.
@@ -148,6 +154,76 @@ type packageUsage struct {
 	Remaining   int64  `json:"remaining"`
 	ExpiresAt   string `json:"expires_at"`
 	Note        string `json:"note"`
+
+	// Merged-row fields (see groupPackagesForPanel): Count is how many raw
+	// packages collapsed into this row; ExpiryDates lists every distinct expiry
+	// date across them; HasNeverExpiring reports a member with no expiry.
+	Count            int64    `json:"count"`
+	ExpiryDates      []string `json:"expiry_dates,omitempty"`
+	HasNeverExpiring bool     `json:"has_never_expiring,omitempty"`
+}
+
+// groupPackagesForPanel merges same-kind packages into one row, mirroring the
+// dashboard's mergePkgs (app.js): the key is kind|scope|daily-ness|note, with
+// the note part applied only to admin_grant whose note is user-facing copy
+// that must not be lost. login_checkin mints one package per day; unmerged the
+// table would grow to dozens of identical rows.
+func groupPackagesForPanel(rows []packageUsage) []packageUsage {
+	order := make([]*packageUsage, 0, len(rows))
+	byKey := make(map[string]*packageUsage, len(rows))
+	for i := range rows {
+		p := rows[i]
+		visibleNote := ""
+		if p.Kind == "admin_grant" {
+			visibleNote = strings.TrimSpace(p.Note)
+		}
+		key := p.Kind + "|" + p.Scope + "|" + strconv.FormatBool(p.DailyTokens != 0) + "|" + visibleNote
+		g := byKey[key]
+		if g == nil {
+			cp := p
+			cp.Count = 1
+			if p.ExpiresAt != "" {
+				cp.ExpiryDates = []string{p.ExpiresAt}
+			}
+			cp.HasNeverExpiring = p.ExpiresAt == ""
+			byKey[key] = &cp
+			order = append(order, &cp)
+			continue
+		}
+		g.Count++
+		g.DailyTokens += p.DailyTokens
+		g.TotalTokens += p.TotalTokens
+		g.UsedToday += p.UsedToday
+		g.UsedTokens += p.UsedTokens
+		g.Remaining += p.Remaining
+		if p.ExpiresAt != "" {
+			g.ExpiryDates = appendDistinct(g.ExpiryDates, p.ExpiresAt)
+		} else {
+			g.HasNeverExpiring = true
+		}
+	}
+	out := make([]packageUsage, 0, len(order))
+	for _, g := range order {
+		sort.Strings(g.ExpiryDates)
+		out = append(out, *g)
+	}
+	return out
+}
+
+func appendDistinct(list []string, items ...string) []string {
+	for _, it := range items {
+		found := false
+		for _, have := range list {
+			if have == it {
+				found = true
+				break
+			}
+		}
+		if !found {
+			list = append(list, it)
+		}
+	}
+	return list
 }
 
 // packageLabels mirrors the CLI's PACKAGE_LABELS so the panel shows the same
@@ -253,6 +329,10 @@ func collectUsage(callbackID string) ([]accountUsage, error) {
 			item.TotalRemainingTokens += p.Remaining
 			item.TotalUsedToday += p.UsedToday
 		}
+		// The panel mirrors the dashboard's merged view, not the raw per-day
+		// packages (login_checkin mints one per day; unmerged the table grows
+		// into dozens of identical rows).
+		item.Packages = groupPackagesForPanel(item.Packages)
 		out = append(out, item)
 	}
 	return out, nil

@@ -161,3 +161,88 @@ func TestPanelResourceRouteRequiresExactPath(t *testing.T) {
 		}
 	}
 }
+
+// groupPackagesForPanel must collapse per-day login_checkin packages into one
+// row (the dashboard's mergePkgs behaviour): same kind+scope+daily-ness merge,
+// distinct expiry dates survive in expiry_dates, sums add up, and a member
+// without an expiry flags has_never_expiring.
+func TestGroupPackagesForPanelMergesLoginCheckin(t *testing.T) {
+	rows := make([]packageUsage, 0, 8)
+	total := int64(0)
+	remaining := int64(0)
+	for i := 1; i <= 8; i++ {
+		p := packageUsage{
+			ID:          int64(1000 + i),
+			Kind:        "login_checkin",
+			KindLabel:   "登录打卡",
+			Scope:       "all",
+			DailyTokens: 0,
+			TotalTokens: 2_000_000,
+			Remaining:   2_000_000 - int64(i*100),
+			ExpiresAt:   time.Date(2026, 9, 25+i, 8, 0, 0, 0, time.UTC).Format("2006-01-02 15:04:05"),
+		}
+		total += p.TotalTokens
+		remaining += p.Remaining
+		rows = append(rows, p)
+	}
+	got := groupPackagesForPanel(rows)
+	if len(got) != 1 {
+		t.Fatalf("got %d groups, want 1", len(got))
+	}
+	g := got[0]
+	if g.Count != 8 {
+		t.Errorf("count = %d, want 8", g.Count)
+	}
+	if g.TotalTokens != total || g.Remaining != remaining {
+		t.Errorf("sums = total %d/%d remaining %d/%d", g.TotalTokens, total, g.Remaining, remaining)
+	}
+	if len(g.ExpiryDates) != 8 {
+		t.Fatalf("expiry_dates = %d entries, want 8", len(g.ExpiryDates))
+	}
+	if g.ExpiryDates[0] != "2026-09-26 08:00:00" || g.ExpiryDates[7] != "2026-10-03 08:00:00" {
+		t.Errorf("expiry_dates not sorted: %v", g.ExpiryDates)
+	}
+	if g.HasNeverExpiring {
+		t.Error("has_never_expiring = true, want false")
+	}
+}
+
+// admin_grant notes are user-facing copy; different notes must not merge away.
+func TestGroupPackagesForPanelKeepsAdminGrantNotes(t *testing.T) {
+	rows := []packageUsage{
+		{ID: 1, Kind: "admin_grant", Scope: "all", TotalTokens: 5_000_000, Remaining: 5_000_000, ExpiresAt: "2026-09-29 14:37:29", Note: "内测感谢"},
+		{ID: 2, Kind: "admin_grant", Scope: "all", TotalTokens: 2_000_000, Remaining: 1_999_325, Note: "新用户赠送"},
+		{ID: 3, Kind: "admin_grant", Scope: "all", TotalTokens: 3_000_000, Remaining: 3_000_000, ExpiresAt: "2026-10-01 00:00:00", Note: "内测感谢"},
+	}
+	got := groupPackagesForPanel(rows)
+	if len(got) != 2 {
+		t.Fatalf("got %d groups, want 2 (same note merges, different notes stay apart)", len(got))
+	}
+	if got[0].Count != 2 || got[0].TotalTokens != 8_000_000 {
+		t.Errorf("merged admin_grant group = count %d total %d, want 2 / 8000000", got[0].Count, got[0].TotalTokens)
+	}
+	if len(got[0].ExpiryDates) != 2 {
+		t.Errorf("merged group expiry_dates = %v, want both dates", got[0].ExpiryDates)
+	}
+	if got[1].Count != 1 {
+		t.Errorf("distinct-note group count = %d, want 1", got[1].Count)
+	}
+}
+
+// A never-expiring member mixed into an expiring group keeps both signals.
+func TestGroupPackagesForPanelNeverExpiring(t *testing.T) {
+	rows := []packageUsage{
+		{ID: 1, Kind: "invite", Scope: "all", TotalTokens: 1_000_000, Remaining: 800_000, ExpiresAt: "2026-10-01 00:00:00"},
+		{ID: 2, Kind: "invite", Scope: "all", TotalTokens: 1_000_000, Remaining: 900_000},
+	}
+	got := groupPackagesForPanel(rows)
+	if len(got) != 1 {
+		t.Fatalf("got %d groups, want 1", len(got))
+	}
+	if !got[0].HasNeverExpiring || len(got[0].ExpiryDates) != 1 {
+		t.Errorf("group = never %v dates %v, want never=true with 1 date", got[0].HasNeverExpiring, got[0].ExpiryDates)
+	}
+	if got[0].Remaining != 1_700_000 {
+		t.Errorf("remaining = %d, want 1700000", got[0].Remaining)
+	}
+}
