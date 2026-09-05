@@ -28,7 +28,8 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends git ca-certificates binutils
+          apt-get install -y --no-install-recommends \
+            git ca-certificates binutils gcc libc6-dev
 
       - uses: actions/checkout@v7
 
