@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -12,8 +13,21 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-// seedUsageSnapshot installs a snapshot for one test and restores the previous
-// one afterwards.
+// TestIsTransientCancel pins which upstream failures deserve one retry: only
+// the host tearing down the request context (context canceled) is momentary;
+// a 502 or nil must not be retried.
+func TestIsTransientCancel(t *testing.T) {
+	if !isTransientCancel(errors.New(`host.http.do: host error host_call_failed: execute host http request: Get "https://api.u1s1.io/v1/me": context canceled`)) {
+		t.Fatal("context canceled must count as transient")
+	}
+	if isTransientCancel(errors.New("u1s1 me: 502 Bad Gateway")) {
+		t.Fatal("an upstream 502 is not a cancellation")
+	}
+	if isTransientCancel(nil) {
+		t.Fatal("nil must not count as transient")
+	}
+}
+
 func seedUsageSnapshot(t *testing.T, fetchedAt time.Time) {
 	t.Helper()
 	usageCacheMu.Lock()

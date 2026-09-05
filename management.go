@@ -268,6 +268,14 @@ func derefInt64(v *int64) int64 {
 // collectUsage reads /v1/me for every u1s1 credential the host knows about.
 // An error means enumeration itself failed (host bridge hiccup); per-credential
 // read failures are reported inline via accountUsage.Error instead.
+// isTransientCancel reports whether an upstream error is the host cancelling
+// the request context (context canceled). It is momentary by nature — the panel
+// aborted the fetch it no longer wants, or a connection blip — so callers give
+// it exactly one retry instead of surfacing a failure card over a blip.
+func isTransientCancel(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "context canceled")
+}
+
 func collectUsage(callbackID string) ([]accountUsage, error) {
 	entries, err := hostAuthList()
 	if err != nil {
@@ -291,6 +299,15 @@ func collectUsage(callbackID string) ([]accountUsage, error) {
 		item.Email = sa.Email
 		attestation := attestationFor(entry.AuthIndex, sa, callbackID)
 		me, errMe := fetchMe(sa, attestation, callbackID)
+		if errMe != nil && isTransientCancel(errMe) {
+			// The host tears the upstream down together with the management
+			// request's context (a view switch aborts the panel's fetch, a
+			// connection hiccup). That is momentary by nature: one retry clears
+			// most of these without punishing the panel with a per-account
+			// failure card over a blip.
+			time.Sleep(500 * time.Millisecond)
+			me, errMe = fetchMe(sa, attestation, callbackID)
+		}
 		if errMe != nil {
 			item.Error = redactSecrets(errMe.Error())
 			out = append(out, item)
@@ -429,7 +446,7 @@ func handleManagement(raw []byte) ([]byte, error) {
 	base := loadedManagementBase() + "/plugins/" + providerName
 	switch {
 	case req.Method == http.MethodGet && path == base+"/usage":
-		accounts, errUsage := cachedUsage(req.HostCallbackID, req.Query.Get("refresh") == "1")
+		accounts, errUsage := cachedUsage(req.HostCallbackID, isTruthyQuery(req.Query.Get("refresh")))
 		if errUsage != nil {
 			// Nothing cached to fall back on: tell the client the enumeration
 			// failed instead of answering 200 with a look-alike empty list.
@@ -468,8 +485,13 @@ func handleManagement(raw []byte) ([]byte, error) {
 		}))
 
 	// --- daily login check-in ------------------------------------------------
+	// live=1 additionally reads the website /api/me per account so the panel can
+	// state whether today is claimed instead of inferring it from the last run.
+	// The quota view's attention badge polls this route without live, so the
+	// default stays free of per-account network calls.
 	case req.Method == http.MethodGet && path == base+"/checkin/status":
-		status, errStatus := handleCheckinStatus()
+		live := isTruthyQuery(req.Query.Get("live"))
+		status, errStatus := handleCheckinStatus(live, req.HostCallbackID)
 		if errStatus != nil {
 			return okEnvelope(jsonResponse(http.StatusBadGateway, map[string]any{"error": redactSecrets(errStatus.Error())}))
 		}

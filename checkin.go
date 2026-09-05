@@ -28,6 +28,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -66,9 +67,15 @@ type checkinSidecar struct {
 // checkinRunState records one check-in attempt for the panel.
 type checkinRunState struct {
 	At      string `json:"at"`
-	Status  string `json:"status"` // ok | already | no_cookie | error
+	Status  string `json:"status"` // ok | already | no_cookie | error | auth_expired
 	Message string `json:"message,omitempty"`
 }
+
+// errCheckinSessionExpired is the sentinel for a stale website session cookie.
+// Callers route it with errors.Is: the status route flips needs_login so the
+// panel's attention badge fires, and the scheduler records status auth_expired
+// (the panel renders that as 会话已失效) instead of the generic error.
+var errCheckinSessionExpired = errors.New("网页会话已失效，请重新登录 u1s1.io 并更新 Cookie")
 
 // webLoginCheckin mirrors the login_checkin object on the website /api/me.
 type webLoginCheckin struct {
@@ -300,7 +307,7 @@ func webMe(origin, cookie, callbackID string) (*webMeResponse, error) {
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("网页会话已失效，请重新登录 u1s1.io 并更新 Cookie")
+		return nil, fmt.Errorf("%w", errCheckinSessionExpired)
 	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("u1s1 web /api/me: %s", gatewayMessage(resp.Body, resp.StatusCode))
@@ -359,7 +366,11 @@ func runCheckinFor(origin, email, credPath, callbackID string) *checkinRunState 
 	// The callback ID rides along so manual runs stay attributed in host logs.
 	me, errMe := webMe(origin, cookie, callbackID)
 	if errMe != nil {
-		state := &checkinRunState{At: nowRFC3339(), Status: "error", Message: redactSecrets(errMe.Error())}
+		status := "error"
+		if errors.Is(errMe, errCheckinSessionExpired) {
+			status = "auth_expired"
+		}
+		state := &checkinRunState{At: nowRFC3339(), Status: status, Message: redactSecrets(errMe.Error())}
 		_ = updateCheckinSidecar(sidecarPath, func(sc *checkinSidecar) { sc.LastRun = state })
 		return state
 	}
@@ -459,34 +470,79 @@ func runScheduledCheckins() {
 // ---------------------------------------------------------------------------
 
 type checkinStatusResponse struct {
-	Enabled   bool                `json:"enabled"`
-	Times     string              `json:"times"`
-	WebOrigin string              `json:"web_origin"`
-	NextRun   string              `json:"next_run,omitempty"`
-	Accounts  []checkinAccountRow `json:"accounts"`
+	Enabled   bool   `json:"enabled"`
+	Times     string `json:"times"`
+	WebOrigin string `json:"web_origin"`
+	NextRun   string `json:"next_run,omitempty"`
+	// Live marks a snapshot that queried the website /api/me per account, so the
+	// panel knows whether today_claimed and the streak fields carry meaning or
+	// are simply absent. Without it a local-only read is indistinguishable from a
+	// live read that found a zero streak.
+	Live     bool                `json:"live,omitempty"`
+	Accounts []checkinAccountRow `json:"accounts"`
 }
 
 type checkinAccountRow struct {
-	AuthIndex    string           `json:"auth_index"`
-	Name         string           `json:"name"`
-	Email        string           `json:"email"`
-	CookieSet    bool             `json:"cookie_set"`
-	CookieHint   string           `json:"cookie_hint,omitempty"`
-	LastRun      *checkinRunState `json:"last_run,omitempty"`
-	NeedsLogin   bool             `json:"needs_login"`
-	TodayClaimed bool             `json:"today_claimed,omitempty"`
+	AuthIndex       string           `json:"auth_index"`
+	Name            string           `json:"name"`
+	Email           string           `json:"email"`
+	CookieSet       bool             `json:"cookie_set"`
+	CookieHint      string           `json:"cookie_hint,omitempty"`
+	CookieUpdatedAt string           `json:"cookie_updated_at,omitempty"`
+	LastRun         *checkinRunState `json:"last_run,omitempty"`
+	NeedsLogin      bool             `json:"needs_login"`
+	TodayClaimed    bool             `json:"today_claimed,omitempty"`
+	// The fields below mirror the website's login_checkin object and are only
+	// populated on a live read. Zero means "not fetched" as far as the panel is
+	// concerned, which is why it gates the whole block on the Live flag.
+	Streak              int    `json:"streak,omitempty"`
+	LongestStreak       int    `json:"longest_streak,omitempty"`
+	CycleDay            int    `json:"cycle_day,omitempty"`
+	CycleDays           int    `json:"cycle_days,omitempty"`
+	NextMilestoneDay    int    `json:"next_milestone_day,omitempty"`
+	NextMilestoneTokens int64  `json:"next_milestone_tokens,omitempty"`
+	TodayTokens         int64  `json:"today_tokens,omitempty"`
+	ValidDays           int    `json:"valid_days,omitempty"`
+	PhoneRequired       bool   `json:"phone_required,omitempty"`
+	LiveError           string `json:"live_error,omitempty"`
 }
 
-// handleCheckinStatus reports per-credential check-in state for the panel. It
-// avoids touching the website (no live /api/me call per account): the panel
-// shows the persisted last run and cookie presence, which is exactly what a
-// status view needs without minting extra requests.
-func handleCheckinStatus() (*checkinStatusResponse, error) {
+// applyLiveCheckin copies the website's login_checkin object onto a panel row.
+func (row *checkinAccountRow) applyLiveCheckin(lc *webLoginCheckin) {
+	if lc == nil {
+		return
+	}
+	row.TodayClaimed = lc.ClaimedToday
+	row.Streak = lc.Streak
+	row.LongestStreak = lc.LongestStreak
+	row.CycleDay = lc.CycleDay
+	row.CycleDays = lc.CycleDays
+	row.NextMilestoneDay = lc.NextMilestoneDay
+	row.NextMilestoneTokens = lc.NextMilestoneTokens
+	row.TodayTokens = lc.Tokens
+	row.ValidDays = lc.ValidDays
+	row.PhoneRequired = lc.PhoneRequired
+}
+
+// handleCheckinStatus reports per-credential check-in state for the panel.
+//
+// By default it touches no network: the persisted last run plus cookie presence
+// is all a status view needs, and the quota view polls this route for its
+// attention badge — a per-account /api/me on every panel load would be a
+// standing cost for a background hint.
+//
+// live=true additionally reads the website /api/me per account that has a
+// cookie, so the panel can answer "did today's check-in happen" authoritatively
+// and show the streak. A per-account failure degrades that one row (live_error)
+// instead of failing the whole view: cookie presence and last run stay useful
+// when the site is unreachable.
+func handleCheckinStatus(live bool, callbackID string) (*checkinStatusResponse, error) {
 	cfg := activeConfig()
 	out := &checkinStatusResponse{
 		Enabled:   checkinEnabled(),
 		Times:     cfg.CheckinTimes,
 		WebOrigin: cfg.webOrigin(),
+		Live:      live,
 	}
 	if slots := checkinSlots(cfg.CheckinTimes); checkinEnabled() && len(slots) > 0 {
 		out.NextRun = nextCheckinAfter(beijingNow(), slots).Format(time.RFC3339)
@@ -509,17 +565,43 @@ func handleCheckinStatus() (*checkinStatusResponse, error) {
 			}
 			sc, errLoad := readCheckinSidecar(checkinSidecarPath(resp.Path))
 			if errLoad == nil {
-				if sc.Cookie != "" {
-					row.CookieSet = true
-					row.CookieHint = cookiePreview(sc.Cookie)
-					row.NeedsLogin = false
-				}
-				row.LastRun = sc.LastRun
+				fillCheckinRow(&row, sc, live, cfg.webOrigin(), callbackID)
 			}
 		}
 		out.Accounts = append(out.Accounts, row)
 	}
 	return out, nil
+}
+
+// fillCheckinRow populates one panel row from its persisted sidecar, then, on a
+// live read, queries the website /api/me for the authoritative today/streak
+// state. A per-account failure degrades that row (live_error) instead of
+// failing the whole view; a 401 additionally flips needs_login so the panel's
+// attention badge fires — an expired session is exactly the case that must
+// surface without the user opening the check-in view to look for it.
+func fillCheckinRow(row *checkinAccountRow, sc *checkinSidecar, live bool, origin, callbackID string) {
+	if sc.Cookie != "" {
+		row.CookieSet = true
+		row.CookieHint = cookiePreview(sc.Cookie)
+		row.CookieUpdatedAt = sc.UpdatedAt
+		row.NeedsLogin = false
+	}
+	row.LastRun = sc.LastRun
+	if !live || !row.CookieSet {
+		return
+	}
+	me, errMe := webMe(origin, normalizeCookie(sc.Cookie), callbackID)
+	if errMe != nil {
+		row.LiveError = redactSecrets(errMe.Error())
+		if errors.Is(errMe, errCheckinSessionExpired) {
+			row.NeedsLogin = true
+		}
+		return
+	}
+	if me.Email != "" {
+		row.Email = me.Email
+	}
+	row.applyLiveCheckin(me.LoginCheckin)
 }
 
 // handleCheckinSetCookie validates and persists a browser session cookie for
@@ -564,12 +646,11 @@ func handleCheckinSetCookie(authIndex, cookie, callbackID string) (*checkinAccou
 		CookieHint: cookiePreview(sc.Cookie),
 		LastRun:    sc.LastRun,
 	}
+	row.CookieUpdatedAt = sc.UpdatedAt
 	if me.Email != "" {
 		row.Email = me.Email
 	}
-	if me.LoginCheckin != nil {
-		row.TodayClaimed = me.LoginCheckin.ClaimedToday
-	}
+	row.applyLiveCheckin(me.LoginCheckin)
 	hostLog("info", "u1s1: check-in cookie updated for "+sa.Email)
 	return &row, nil
 }

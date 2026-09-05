@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>u1s1 额度面板</title>
+<title>u1s1 面板</title>
 <style>
 /* Theme tokens aligned with the CPA management panel:
    default :root = light (paper); data-theme=white | dark. Embedded iframes
@@ -14,6 +14,8 @@
   --surface:#f0eee8;--surface-muted:#e9e6df;--btn-sec:#eef1f6;--btn-sec-hover:#e4e8ef;
   --input-bg:#ffffff;--placeholder:rgba(109,103,96,.55);--track:#e9e6df;
   --err-soft:rgba(198,87,70,.10);--err-border:rgba(198,87,70,.30);
+  --ok-soft:rgba(16,185,129,.10);--ok-border:rgba(16,185,129,.35);
+  --warn-soft:rgba(224,170,20,.12);--warn-border:rgba(224,170,20,.38);
   --mut-soft:rgba(109,103,96,.12);--mut-border:rgba(109,103,96,.28);
   --acc-ring:rgba(76,141,255,.18);
   color-scheme:light
@@ -30,6 +32,8 @@
   --surface:#2f2d28;--surface-muted:#35332e;--btn-sec:#35332e;--btn-sec-hover:#3f3c36;
   --input-bg:#1e1d1b;--placeholder:rgba(154,148,140,.55);--track:#35332e;
   --err-soft:rgba(224,122,106,.12);--err-border:rgba(224,122,106,.38);
+  --ok-soft:rgba(52,211,153,.12);--ok-border:rgba(52,211,153,.38);
+  --warn-soft:rgba(240,192,80,.14);--warn-border:rgba(240,192,80,.40);
   --mut-soft:rgba(154,148,140,.16);--mut-border:rgba(154,148,140,.32);
   --acc-ring:rgba(76,141,255,.28);
   color-scheme:dark
@@ -42,13 +46,37 @@ h1{font-size:20px;margin:0 0 4px;font-weight:600}
 .sub{color:var(--mut);font-size:13px;margin-bottom:16px}
 /* Toolbar sits in normal flow under the title so host-panel chrome in the
    top-right corner can never overlap it. */
-.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.bar .spacer{flex:1 1 auto;min-width:8px}
 .bar .stamp{color:var(--mut);font-size:12px;margin-left:2px}
 button{background:var(--acc);color:var(--on-acc);border:0;border-radius:8px;
        padding:8px 14px;cursor:pointer;font-size:13px}
 button.sec{background:var(--btn-sec);color:var(--fg)}
 button.sec:hover{background:var(--btn-sec-hover)}
 button:disabled{opacity:.5;cursor:default}
+button.link{background:none;color:var(--acc);padding:0;font-size:12px}
+button.link:hover{text-decoration:underline}
+button.danger{background:var(--btn-sec);color:var(--err)}
+/* Tabs: the view is the page's primary state, so it gets tab semantics rather
+   than three buttons that overwrite each other with no indication of where
+   you are. */
+.tab{background:transparent;color:var(--mut);border:1px solid transparent;padding:7px 13px}
+.tab:hover{background:var(--btn-sec);color:var(--fg)}
+.tab[aria-selected="true"]{background:var(--surface);color:var(--fg);
+     border-color:var(--border);font-weight:600}
+.tab .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+     background:var(--err);margin-left:6px;vertical-align:middle}
+/* One fixed place for outcomes. Button labels are too small to hold an upstream
+   error message and vanish before they can be read. */
+.msgbar{display:flex;gap:10px;align-items:flex-start;border-radius:10px;padding:10px 12px;
+     margin-bottom:14px;font-size:13px;border:1px solid var(--mut-border);background:var(--mut-soft)}
+.msgbar.ok{border-color:var(--ok-border);background:var(--ok-soft)}
+.msgbar.warn{border-color:var(--warn-border);background:var(--warn-soft)}
+.msgbar.err{border-color:var(--err-border);background:var(--err-soft);color:var(--err)}
+.msgbar .msgtext{flex:1;white-space:pre-wrap;word-break:break-word}
+.msgbar .msgact{flex:0 0 auto}
+.msgbar .msgx{background:none;color:inherit;opacity:.6;padding:0 4px;font-size:16px;line-height:1}
+.msgbar .msgx:hover{opacity:1}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;
       padding:16px 18px;margin-bottom:14px}
 .acct-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:14px}
@@ -56,6 +84,8 @@ button:disabled{opacity:.5;cursor:default}
 .tag{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--mut-border);
      background:var(--mut-soft);color:var(--mut)}
 .tag.off{color:var(--err);border-color:var(--err-border);background:var(--err-soft)}
+.tag.good{color:var(--ok);border-color:var(--ok-border);background:var(--ok-soft)}
+.tag.hold{color:var(--warn);border-color:var(--warn-border);background:var(--warn-soft)}
 .mut{color:var(--mut);font-size:12px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
 .kv{background:var(--surface);border-radius:10px;padding:10px 12px}
@@ -73,6 +103,9 @@ tbody tr:last-child td{border-bottom:none}
 .bar-track.low>i{background:var(--warn)}
 .bar-track.crit>i{background:var(--err)}
 .note{font-size:11px;color:var(--mut);margin-top:3px}
+/* A degraded-but-usable row: the live website read failed, so the values shown
+   fall back to local records. Warn, not error — the card is still meaningful. */
+.note.warnline{color:var(--warn)}
 .usage-package-count{font-size:11px;color:var(--mut);border:1px solid var(--border);border-radius:999px;padding:0 6px;margin-left:4px;vertical-align:middle}
 .usage-package-note{color:var(--mut);padding-top:0}
 .err{color:var(--err)}
@@ -83,6 +116,24 @@ tbody tr:last-child td{border-bottom:none}
 .login input::placeholder{color:var(--placeholder)}
 .hint{font-size:12px;color:var(--mut);margin-top:8px}
 code{background:var(--surface-muted);padding:1px 5px;border-radius:4px;font-size:12px}
+/* check-in view */
+.row-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}
+.field{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
+.field input{flex:1;min-width:240px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);
+     background:var(--input-bg);color:var(--fg);font-size:13px}
+.field input::placeholder{color:var(--placeholder)}
+.creds{margin-top:12px;padding:12px;border:1px dashed var(--border);border-radius:10px;background:var(--surface)}
+.creds[hidden]{display:none}
+.steps{margin:6px 0 0;padding-left:18px;font-size:12px;color:var(--mut)}
+.steps li{margin:2px 0}
+.slot{font-size:12px;margin-top:8px;white-space:pre-wrap;word-break:break-word}
+.slot.ok{color:var(--ok)}
+.slot.err{color:var(--err)}
+.skel{height:12px;border-radius:6px;background:var(--surface-muted);margin:8px 0;
+     animation:pulse 1.2s ease-in-out infinite}
+.skel.w40{width:40%}.skel.w70{width:70%}
+@keyframes pulse{0%,100%{opacity:.55}50%{opacity:1}}
+@media (prefers-reduced-motion:reduce){.skel{animation:none}}
 </style>
 <script>
 /* Early theme sync (runs before first paint): mirror the CPA parent's
@@ -131,15 +182,18 @@ code{background:var(--surface-muted);padding:1px 5px;border-radius:4px;font-size
 </head>
 <body>
 <div class="wrap">
-  <h1>u1s1 额度</h1>
-  <div class="sub">今日免费额度 · 余额(按量) · 用量包明细（与 <code>u1s1 usage</code> 一致）</div>
-  <div class="bar">
-    <button id="reload">刷新</button>
-    <button id="diag" class="sec">最近错误</button>
-    <button id="checkin" class="sec">签到</button>
+  <h1 id="ptitle">u1s1</h1>
+  <div class="sub" id="psub"></div>
+  <div class="bar" role="tablist" aria-label="u1s1 面板视图">
+    <button id="tab-usage" class="tab" role="tab" aria-selected="true" aria-controls="root">额度</button>
+    <button id="tab-checkin" class="tab" role="tab" aria-selected="false" aria-controls="root">签到</button>
+    <button id="tab-diag" class="tab" role="tab" aria-selected="false" aria-controls="root">最近错误</button>
+    <span class="spacer"></span>
+    <button id="refresh" class="sec">刷新</button>
     <span id="stamp" class="stamp" role="status" aria-live="polite"></span>
   </div>
-  <div id="root"><p class="mut">加载中…</p></div>
+  <div id="msg" role="alert" hidden></div>
+  <div id="root" role="tabpanel" aria-live="polite"></div>
 </div>
 
 <script>
@@ -263,6 +317,144 @@ async function callAPI(path, opts = {}) {
   return r.json();
 }
 
+/* ---- message bar -------------------------------------------------------
+   Outcomes land here instead of in a button label: upstream messages are long
+   ("网页会话已失效，请重新登录…"), and a label that reverts after two seconds
+   is gone before it can be read. Text goes in via textContent, so upstream
+   strings need no escaping to be safe here.
+   ---------------------------------------------------------------------- */
+const msgEl = () => document.getElementById("msg");
+function clearMsg() { const el = msgEl(); el.hidden = true; el.textContent = ""; }
+function showMsg(text, kind, action) {
+  const el = msgEl();
+  el.className = "msgbar " + (kind || "");
+  el.textContent = "";
+  const span = document.createElement("span");
+  span.className = "msgtext";
+  span.textContent = text;
+  el.appendChild(span);
+  if (action) {
+    const b = document.createElement("button");
+    b.className = "sec msgact";
+    b.textContent = action.label;
+    b.onclick = action.run;
+    el.appendChild(b);
+  }
+  const x = document.createElement("button");
+  x.className = "msgx";
+  x.setAttribute("aria-label", "关闭");
+  x.textContent = "×";
+  x.onclick = clearMsg;
+  el.appendChild(x);
+  el.hidden = false;
+}
+
+/* ---- view router -------------------------------------------------------
+   Three views share one #root. Without an explicit active view the toolbar
+   buttons overwrite each other with no indication of where you are, and the
+   only way back to the quota view is the refresh button — which also spends an
+   upstream /v1/me call on what the user meant as navigation. The router keeps
+   the tab state, gives each view its own in-flight guard (so switching views is
+   never silently swallowed), and aborts the request of a view being left.
+   ---------------------------------------------------------------------- */
+const VIEWS = {
+  usage: {
+    tab: "tab-usage", title: "u1s1 额度", refresh: "刷新额度",
+    sub: '今日免费额度 · 余额(按量) · 用量包明细（与 <code>u1s1 usage</code> 一致）',
+    load: loadUsage,
+  },
+  checkin: {
+    tab: "tab-checkin", title: "u1s1 每日签到", refresh: "刷新状态",
+    sub: "每日登录打卡：会话状态、连续天数、手动补签",
+    load: loadCheckin,
+  },
+  diag: {
+    tab: "tab-diag", title: "u1s1 最近错误", refresh: "刷新错误",
+    sub: "最近的上游失败与网关请求编号（报障时附上编号）",
+    load: loadDiagnostics,
+  },
+};
+
+let activeView = "usage";
+const busy = {};      // view -> bool, per-view so tab switches never no-op
+const aborters = {};  // view -> AbortController for the in-flight request
+
+function setStamp(text) { document.getElementById("stamp").textContent = text || ""; }
+function skeleton() {
+  return `<div class="card"><div class="skel w40"></div><div class="skel"></div><div class="skel w70"></div></div>`;
+}
+
+// Badge on the 签到 tab when any account needs attention, so a broken session
+// surfaces without having to open the view to look for it.
+function markCheckinAttention(on) {
+  const tab = document.getElementById("tab-checkin");
+  const dot = tab.querySelector(".dot");
+  if (on && !dot) {
+    const d = document.createElement("span");
+    d.className = "dot";
+    d.title = "有账号需要重新登录";
+    tab.appendChild(d);
+  } else if (!on && dot) dot.remove();
+}
+
+async function switchView(name, opts = {}) {
+  const view = VIEWS[name];
+  if (!view) return;
+  const changing = activeView !== name;
+  // Clicking the already-active tab is a no-op: navigation is the tabs' job
+  // and reload belongs to the refresh button. Without this the tab acts as a
+  // silent second reloader that spends an upstream call on "I'm already here".
+  // (busy-guarded force reloads and programmatic loads pass opts.force/skeleton
+  // or no noReload flag, so they are unaffected.)
+  if (!changing && opts.noReload && !opts.force && !opts.skeleton) return;
+  if (changing) {
+    // Leaving a view: cancel its request so a slow response cannot paint over
+    // the view the user just switched to.
+    const prev = aborters[activeView];
+    if (prev) { prev.abort(); delete aborters[activeView]; busy[activeView] = false; }
+    activeView = name;
+  } else if (busy[name] && !opts.force) {
+    return; // same view, already loading: nothing to do
+  }
+
+  for (const [key, v] of Object.entries(VIEWS)) {
+    document.getElementById(v.tab).setAttribute("aria-selected", String(key === name));
+  }
+  document.getElementById("ptitle").textContent = view.title;
+  document.getElementById("psub").innerHTML = view.sub;
+  document.title = view.title;
+  const refreshBtn = document.getElementById("refresh");
+  refreshBtn.textContent = view.refresh;
+  if (changing) { clearMsg(); setStamp(""); }
+
+  const root = document.getElementById("root");
+  if (changing || opts.skeleton) root.innerHTML = skeleton();
+
+  if (busy[name] && aborters[name]) { aborters[name].abort(); delete aborters[name]; }
+  busy[name] = true;
+  refreshBtn.disabled = true;
+  const controller = new AbortController();
+  aborters[name] = controller;
+  try {
+    await view.load({ force: !!opts.force, signal: controller.signal });
+  } catch (e) {
+    if (e.name === "AbortError") return;
+    if (e.needKey) { renderLogin(e.message === "missing management key" ? "" : e.message); return; }
+    root.innerHTML = `<div class="card err">加载失败：${esc(e.message)}</div>`;
+    setStamp("");
+  } finally {
+    // Only the request that currently owns the slot may clear it: a force
+    // refresh aborts the in-flight request and starts a new one, and the old
+    // request's finally must not zero the new one's busy flag or re-enable the
+    // refresh button while it is still loading.
+    if (aborters[name] === controller) {
+      delete aborters[name];
+      busy[name] = false;
+      if (activeView === name) refreshBtn.disabled = false;
+    }
+  }
+}
+
 function renderLogin(msg) {
   document.getElementById("root").innerHTML = `
     <div class="card login">
@@ -276,17 +468,19 @@ function renderLogin(msg) {
     const v = document.getElementById("keyin").value.trim();
     if (!v) return;
     if (!storeSessionKey(v)) { renderLogin("无法写入 sessionStorage"); return; }
-    load();
+    switchView(activeView, { force: false });
   };
   document.getElementById("keygo").onclick = go;
   document.getElementById("keyin").onkeydown = e => { if (e.key === "Enter") go(); };
 }
 
+/* ---- usage view -------------------------------------------------------- */
 function renderAccount(a) {
   if (a.error) {
     return `<div class="card">
       <div class="acct-head"><span class="acct-email">${esc(a.email || a.label || a.name)}</span>
-      <span class="tag off">读取失败</span></div>
+      <span class="tag off">读取失败</span>
+      <button data-act="retry-acct" class="sec" style="margin-left:auto">重试</button></div>
       <div class="err">${esc(a.error)}</div></div>`;
   }
 
@@ -346,39 +540,43 @@ function renderAccount(a) {
   </div>`;
 }
 
-let loading = false;
-
-async function load(force) {
-  // Guard re-entry: the button is disabled below, but Enter in the key form and
-  // the initial load can both reach here.
-  if (loading) return;
-  loading = true;
-  const root = document.getElementById("root");
-  const btn = document.getElementById("reload");
-  const label = btn.textContent;
+async function loadUsage({ force, signal }) {
   // A forced refresh that finds unchanged quota numbers is indistinguishable
   // from a dead button, so say out loud that the click was taken.
-  btn.textContent = "刷新中…";
-  btn.disabled = true;
-  if (force) document.getElementById("stamp").textContent = "正在读取 /v1/me…";
+  if (force) setStamp("正在读取 /v1/me…");
+  const data = force
+    ? await callAPI("/plugins/u1s1/refresh", { method: "POST", signal })
+    : await callAPI("/plugins/u1s1/usage", { signal });
+  const accounts = data.accounts || [];
+  setStamp(data.fetched_at ? "更新于 " + localTime(data.fetched_at) : "");
+  document.getElementById("root").innerHTML = accounts.length
+    ? accounts.map(renderAccount).join("")
+    : '<div class="card"><div class="mut">没有 u1s1 凭证。用管理端 <code>/v0/management/u1s1-auth-url</code> 发起设备登录，或把 <code>~/.u1s1/config.json</code> 放进 auth-dir。</div></div>';
+  // Cheap side errand: the local (no-network) check-in status tells us whether a
+  // session needs attention, so the quota view can flag it instead of the user
+  // discovering it only when the quota stops growing.
+  probeCheckinAttention();
+}
+
+// Stale-warning suppression: the quota view re-probes on every load, and a warn
+// the user dismissed must stay dismissed until the stale roster actually
+// changes, not come back on the next refresh. key is the roster signature.
+let warnedStaleKey = "";
+
+async function probeCheckinAttention() {
   try {
-    const data = force
-      ? await callAPI("/plugins/u1s1/refresh", { method: "POST" })
-      : await callAPI("/plugins/u1s1/usage");
-    const accounts = data.accounts || [];
-    document.getElementById("stamp").textContent = data.fetched_at ? "更新于 " + localTime(data.fetched_at) : "";
-    root.innerHTML = accounts.length
-      ? accounts.map(renderAccount).join("")
-      : '<div class="card"><div class="mut">没有 u1s1 凭证。用管理端 <code>/v0/management/u1s1-auth-url</code> 发起设备登录，或把 <code>~/.u1s1/config.json</code> 放进 auth-dir。</div></div>';
-  } catch (e) {
-    document.getElementById("stamp").textContent = "";
-    if (e.needKey) renderLogin(e.message === "missing management key" ? "" : e.message);
-    else root.innerHTML = `<div class="card err">加载失败：${esc(e.message)}</div>`;
-  } finally {
-    loading = false;
-    btn.disabled = false;
-    btn.textContent = label;
-  }
+    const data = await callAPI("/plugins/u1s1/checkin/status");
+    const stale = (data.accounts || []).filter(a => a.needs_login || !a.cookie_set);
+    markCheckinAttention(stale.length > 0);
+    if (stale.length && activeView === "usage") {
+      const key = stale.map(a => a.email || a.name).join("|");
+      if (key === warnedStaleKey) return;
+      warnedStaleKey = key;
+      const who = stale.map(a => a.email || a.name).join("、");
+      showMsg(`${stale.length} 个账号的签到会话需要重新登录（${who}），每日打卡已跳过。`, "warn",
+        { label: "去处理", run: () => switchView("checkin") });
+    }
+  } catch { /* advisory only: never let this break the quota view */ }
 }
 
 /* ---- diagnostics ------------------------------------------------------- */
@@ -404,147 +602,352 @@ function renderDiagnostics(data) {
   </div>`;
 }
 
-async function loadDiagnostics() {
-  if (loading) return;
-  loading = true;
-  const root = document.getElementById("root");
-  const btn = document.getElementById("diag");
-  const label = btn.textContent;
-  btn.textContent = "读取中…";
-  btn.disabled = true;
-  try {
-    root.innerHTML = renderDiagnostics(await callAPI("/plugins/u1s1/diagnostics"));
-    document.getElementById("stamp").textContent = "最近错误 · 点「刷新」回到额度";
-  } catch (e) {
-    if (e.needKey) renderLogin(e.message === "missing management key" ? "" : e.message);
-    else root.innerHTML = `<div class="card err">加载失败：${esc(e.message)}</div>`;
-  } finally {
-    loading = false;
-    btn.disabled = false;
-    btn.textContent = label;
-  }
+async function loadDiagnostics({ signal }) {
+  const data = await callAPI("/plugins/u1s1/diagnostics", { signal });
+  document.getElementById("root").innerHTML = renderDiagnostics(data);
+  setStamp(`${(data.errors || []).length} 条记录`);
 }
-
-document.getElementById("reload").onclick = () => load(true);
-document.getElementById("diag").onclick = () => loadDiagnostics();
 
 /* ---- daily login check-in -----------------------------------------------
    The claim endpoint lives on the website and needs a browser session cookie,
    which only the account owner can obtain (log in to u1s1.io, copy the
-   Cookie). The plugin stores it next to the credential and claims twice a day
-   at the configured Beijing-time slots. Without a cookie the panel shows a
-   login prompt; with one it shows the last result and offers a manual run.
+   Cookie). The plugin stores it next to the credential and claims at the
+   configured Beijing-time slots.
+
+   The view answers one question first — "did today's check-in happen?" — and
+   only then offers controls. A configured account collapses its credential
+   input away; an account needing a session leads with it.
    ------------------------------------------------------------------------ */
 const CHECKIN_URL = "https://u1s1.io/dashboard";
 
-function renderCheckin(data) {
-  const runTag = s => ({
-    ok: ["已打卡", "tag"],
-    already: ["今日已打", "tag"],
-    no_cookie: ["未设置 Cookie", "tag off"],
-    error: ["失败", "tag off"],
-  }[s] || [s || "—", "tag"]);
-  const cards = (data.accounts || []).map(a => {
-    const [stLabel, stCls] = runTag(a.last_run ? a.last_run.status : "no_cookie");
-    const last = a.last_run
-      ? `${localTime(a.last_run.at)} · ${esc(a.last_run.message || "")}`
-      : "从未运行";
-    const needsLogin = a.needs_login || !a.cookie_set;
-    return `<div class="card">
-      <div class="acct-head">
-        <span class="acct-email">${esc(a.email || a.name)}</span>
-        ${needsLogin ? '<span class="tag off">需要登录</span>' : '<span class="tag">Cookie 已设置</span>'}
-        <span class="tag ${stCls}">${stLabel}</span>
-        <span class="mut">${esc(a.name)}</span>
-      </div>
-      ${needsLogin
-        ? `<div class="hint">还没有网页会话 Cookie。用浏览器登录 <a href="${CHECKIN_URL}" target="_blank" rel="noopener noreferrer">u1s1.io</a> 后，把 Cookie 值粘贴到下方并保存；保存时插件会用 /api/me 验证有效性。</div>`
-        : `<div class="note">Cookie ${esc(a.cookie_hint || "")} · 最近 ${last}</div>`}
-      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-        <input data-checkin-cookie="${esc(a.auth_index)}" type="password" placeholder="粘贴浏览器 Cookie（可留空=沿用已保存的）" autocomplete="off"
-               style="flex:1;min-width:220px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--input-bg);color:var(--fg)">
-        <button data-checkin-save="${esc(a.auth_index)}" class="sec">保存</button>
-        <button data-checkin-run="${esc(a.auth_index)}">立即签到</button>
-        ${a.cookie_set ? `<button data-checkin-clear="${esc(a.auth_index)}" class="sec">清除</button>` : ""}
-      </div>
-      <div class="note">每天可领 200 万 Token 全模型加量包（30 天有效）。自动签到在北京时间 ${esc(data.times || "—")} 执行${data.next_run ? `，下次 ${localTime(data.next_run)}` : ""}。</div>
-    </div>`;
-  }).join("");
-  if (!cards) return '<div class="card"><div class="mut">没有 u1s1 凭证。</div></div>';
-  return `<div class="card">
-    <div class="acct-head"><span class="acct-email">每日登录打卡</span>
-      <span class="mut">${data.enabled ? "自动签到已开启" : "自动签到已关闭（配置 checkin-enabled: false）"} · 站点 ${esc(data.web_origin || "")}</span></div>
-  </div>` + cards;
+// Last-run status -> label. Kept permissive: the scheduler may grow finer
+// statuses (auth_expired, blocked) and an unknown one must still render.
+const RUN_LABEL = {
+  ok: ["打卡成功", "good"],
+  already: ["今日已打卡", "good"],
+  no_cookie: ["未配置会话", "off"],
+  auth_expired: ["会话已失效", "off"],
+  blocked: ["被风控拦截", "hold"],
+  phone_required: ["需绑定手机", "hold"],
+  error: ["失败", "off"],
+};
+
+// Beijing-today helpers. last_run.at is an absolute RFC3339 timestamp, and the
+// badge asks "did today's (Beijing) check-in happen", so the date of the run
+// must be derived in UTC+8, not the panel host's own timezone.
+const BEIJING_OFFSET_MS = 8 * 3600e3;
+function beijingToday() {
+  return new Date(Date.now() + BEIJING_OFFSET_MS).toISOString().slice(0, 10);
+}
+function ranToday(a) {
+  const at = a.last_run && a.last_run.at;
+  if (!at) return false;
+  const d = new Date(at.includes("T") ? at : at.replace(" ", "T") + "Z");
+  return !isNaN(d) && new Date(d.getTime() + BEIJING_OFFSET_MS).toISOString().slice(0, 10) === beijingToday();
 }
 
-async function loadCheckin() {
-  if (loading) return;
-  loading = true;
-  const root = document.getElementById("root");
-  const btn = document.getElementById("checkin");
-  const label = btn.textContent;
-  btn.textContent = "读取中…";
+// The headline badge. today_claimed is authoritative when the status route was
+// asked for live data; otherwise fall back to what the last run recorded. A
+// non-live row's last run may be from a previous day, and calling yesterday's
+// success "今日已签到" would mislead — across a day boundary the honest answer
+// is "not yet claimed today".
+function todayBadge(a) {
+  if (a.needs_login || !a.cookie_set) return ["需要重新登录", "off"];
+  if (a.today_claimed) return ["今日已签到", "good"];
+  const st = a.last_run && a.last_run.status;
+  if (st === "ok" || st === "already") return ranToday(a) ? ["今日已签到", "good"] : ["今日待签到", "hold"];
+  if (st === "error" || st === "auth_expired") return ranToday(a) ? ["今日未签到", "off"] : ["今日待签到", "hold"];
+  // live is a response-level flag; a row whose live read failed (live_error)
+  // has no site data and must not be called "未签到" — unknown is the honest
+  // state, and the card's warnline already says the rest is local records.
+  if (a.live && !a.live_error) return ["今日未签到", "hold"];
+  return ["今日待签到", "hold"];
+}
+
+function renderCheckinAccount(a) {
+  const [badge, badgeCls] = todayBadge(a);
+  const needsLogin = a.needs_login || !a.cookie_set;
+  const [runLabel, runCls] = RUN_LABEL[a.last_run && a.last_run.status] || [null, ""];
+  const last = a.last_run
+    ? `${localTime(a.last_run.at)} · ${esc(a.last_run.message || runLabel || "")}`
+    : "从未运行";
+
+  // Streak/milestone data comes from the website /api/me and is only present on
+  // a live status read. Absent, the block is skipped rather than showing zeros.
+  const stats = a.live ? `<div class="grid">
+      <div class="kv"><div class="k">连续签到</div><div class="v">${Number(a.streak) || 0} 天</div>
+        ${a.longest_streak ? `<div class="note">最长 ${esc(a.longest_streak)} 天</div>` : ""}</div>
+      ${a.cycle_days ? `<div class="kv"><div class="k">奖励周期</div><div class="v">第 ${Number(a.cycle_day) || 0} / ${Number(a.cycle_days)} 天</div></div>` : ""}
+      ${a.next_milestone_day ? `<div class="kv"><div class="k">下一里程碑</div><div class="v sm">第 ${Number(a.next_milestone_day)} 天</div>
+        <div class="note">奖励 ${tokens(a.next_milestone_tokens)} Token</div></div>` : ""}
+      ${a.today_tokens ? `<div class="kv"><div class="k">今日可领</div><div class="v">${tokens(a.today_tokens)} Token</div>
+        ${a.valid_days ? `<div class="note">${Number(a.valid_days)} 天有效</div>` : ""}</div>` : ""}
+    </div>` : "";
+
+  const credsOpen = needsLogin;
+  const creds = `<div class="creds" data-creds="${esc(a.auth_index)}" ${credsOpen ? "" : "hidden"}>
+      <div style="font-weight:600;font-size:13px">${needsLogin ? "配置网页会话 Cookie" : "更新网页会话 Cookie"}</div>
+      <ol class="steps">
+        <li>浏览器登录 <a href="${CHECKIN_URL}" target="_blank" rel="noopener noreferrer">u1s1.io</a></li>
+        <li>开发者工具 → 网络（Network）→ 点开任意 <code>/api/…</code> 请求</li>
+        <li>在「请求标头 / Request Headers」里复制整行 <code>Cookie</code> 的值</li>
+      </ol>
+      <div class="note">会话 Cookie 通常是 HttpOnly，控制台里 <code>document.cookie</code> 取不到它，必须从请求标头复制。保存时插件会调用 /api/me 校验有效性与归属账号。</div>
+      <div class="field">
+        <input data-cookie="${esc(a.auth_index)}" type="password" autocomplete="off"
+               placeholder="粘贴 Cookie 整行，例如 session=…; other=…">
+        <button data-act="save" data-ai="${esc(a.auth_index)}">保存并签到</button>
+        ${needsLogin ? "" : `<button data-act="cancel-creds" data-ai="${esc(a.auth_index)}" class="sec">取消</button>`}
+      </div>
+    </div>`;
+
+  return `<div class="card">
+    <div class="acct-head">
+      <span class="acct-email">${esc(a.email || a.name)}</span>
+      <span class="tag ${badgeCls}">${badge}</span>
+      ${a.live && a.streak ? `<span class="tag">连续 ${Number(a.streak)} 天</span>` : ""}
+      ${a.phone_required ? '<span class="tag hold">需绑定手机</span>' : ""}
+      <span class="mut">${esc(a.name)}</span>
+    </div>
+    ${stats}
+    ${a.live_error
+      ? `<div class="note warnline">读取网站状态失败：${esc(a.live_error)}（下方状态来自本地记录）</div>`
+      : ""}
+    <div class="note">最近运行：${runLabel ? `<span class="tag ${runCls}">${runLabel}</span> ` : ""}${last}</div>
+    ${!needsLogin ? `<div class="note">会话 Cookie ${esc(a.cookie_hint || "")}${a.cookie_updated_at ? ` · 更新于 ${localTime(a.cookie_updated_at)}` : ""}</div>` : ""}
+    <div class="row-actions">
+      <button data-act="run" data-ai="${esc(a.auth_index)}" ${needsLogin ? "disabled" : ""}>立即签到</button>
+      ${needsLogin
+        ? ""
+        : `<button data-act="edit-creds" data-ai="${esc(a.auth_index)}" class="link">更新 Cookie</button>
+           <span class="spacer"></span>
+           <button data-act="clear" data-ai="${esc(a.auth_index)}" class="danger">清除会话</button>`}
+    </div>
+    <div class="slot" data-slot="${esc(a.auth_index)}"></div>
+    ${creds}
+  </div>`;
+}
+
+function renderCheckin(data) {
+  const accounts = data.accounts || [];
+  if (!accounts.length) {
+    return '<div class="card"><div class="mut">没有 u1s1 凭证。先完成设备登录，签到才有对象。</div></div>';
+  }
+  const ready = accounts.filter(a => a.cookie_set && !a.needs_login).length;
+  // Same ranToday rule as todayBadge: a non-live row's last run may be from a
+  // previous day, and yesterday's success must not count as today's.
+  const done = accounts.filter(a => a.today_claimed || (a.last_run && (a.last_run.status === "ok" || a.last_run.status === "already") && ranToday(a))).length;
+  const head = `<div class="card">
+    <div class="acct-head">
+      <span class="acct-email">每日登录打卡</span>
+      <span class="tag ${data.enabled ? "good" : "off"}">${data.enabled ? "自动签到已开启" : "自动签到已关闭"}</span>
+      <span class="mut">${esc(ready)} / ${esc(accounts.length)} 个账号已配置会话 · 今日 ${esc(done)} 个已签到</span>
+    </div>
+    <div class="grid">
+      <div class="kv"><div class="k">运行时刻（北京时间）</div><div class="v sm">${esc(data.times || "—")}</div>
+        ${data.next_run ? `<div class="note">下次 ${localTime(data.next_run)}</div>` : ""}</div>
+      <div class="kv"><div class="k">站点</div><div class="v sm">${esc(data.web_origin || "")}</div>
+        <div class="note">每天可领 200 万 Token 全模型加量包（30 天有效）</div></div>
+    </div>
+    <div class="row-actions">
+      <button data-act="run-all">全部签到</button>
+      ${data.live ? "" : `<button data-act="live" class="sec">读取实时状态</button>`}
+    </div>
+    ${data.enabled ? "" : '<div class="note">配置 <code>checkin-enabled: true</code> 可重新开启自动签到；手动签到不受影响。</div>'}
+    <div class="slot" data-slot="__all__"></div>
+  </div>`;
+  return head + accounts.map(a => renderCheckinAccount({ ...a, live: !!data.live })).join("");
+}
+
+// live=1 asks the status route for a real /api/me read (today_claimed, streak).
+// Defaults on: the check-in view's whole point is answering "did today's claim
+// happen", which only a live read does authoritatively. The quota view's
+// attention badge polls this route separately without live, so it stays
+// network-free; and live mode degrades per-account (live_error) instead of
+// failing the whole view, so an unreachable site costs latency, not a broken
+// page. Accounts without a cookie never trigger a web call.
+let checkinLive = true;
+
+async function loadCheckin({ signal }) {
+  const data = await callAPI("/plugins/u1s1/checkin/status" + (checkinLive ? "?live=1" : ""), { signal });
+  document.getElementById("root").innerHTML = renderCheckin(data);
+  const stale = (data.accounts || []).filter(a => a.needs_login || !a.cookie_set);
+  markCheckinAttention(stale.length > 0);
+  setStamp(data.live ? "实时状态" : "本地状态 · 未查询站点");
+}
+
+/* Actions are delegated from #root: the view re-renders often and per-button
+   handlers would have to be rebound every time. */
+function slotFor(ai) { return document.querySelector(`[data-slot="${CSS.escape(ai)}"]`); }
+function setSlot(ai, text, kind) {
+  const el = slotFor(ai);
+  if (!el) return;
+  el.className = "slot " + (kind || "");
+  el.textContent = text || "";
+}
+
+async function withButton(btn, label, fn) {
+  const old = btn.textContent;
+  btn.textContent = label;
   btn.disabled = true;
+  try { return await fn(); }
+  finally { btn.textContent = old; btn.disabled = false; }
+}
+
+const RUN_KIND = { ok: "ok", already: "ok" };
+
+async function doRun(ai, btn) {
+  return withButton(btn, "签到中…", async () => {
+    const data = await callAPI("/plugins/u1s1/checkin/run?auth_index=" + encodeURIComponent(ai), { method: "POST" });
+    const r = (data.results || [])[0];
+    const msg = r ? (r.message || r.status) : "完成";
+    setSlot(ai, msg, RUN_KIND[r && r.status] || "err");
+    return r;
+  });
+}
+
+async function onRootClick(ev) {
+  const btn = ev.target.closest("[data-act]");
+  if (!btn) return;
+  const act = btn.getAttribute("data-act");
+  const ai = btn.getAttribute("data-ai") || "";
+  const root = document.getElementById("root");
+
   try {
-    const data = await callAPI("/plugins/u1s1/checkin/status");
-    root.innerHTML = renderCheckin(data);
-    document.getElementById("stamp").textContent = "签到 · 点「刷新」回到额度";
-    bindCheckinActions();
+    if (act === "retry-acct") {
+      // Re-run the quota collection for this account. The backend already
+      // retries transient cancellations once; this is the human retry on top.
+      await switchView("usage", { force: true });
+      return;
+    }
+
+    if (act === "edit-creds" || act === "cancel-creds") {
+      const box = root.querySelector(`[data-creds="${CSS.escape(ai)}"]`);
+      if (box) {
+        box.hidden = act === "cancel-creds";
+        if (!box.hidden) box.querySelector("[data-cookie]").focus();
+      }
+      return;
+    }
+
+    if (act === "save") {
+      const input = root.querySelector(`[data-cookie="${CSS.escape(ai)}"]`);
+      const cookie = input ? input.value.trim() : "";
+      if (!cookie) {
+        setSlot(ai, "请先粘贴 Cookie 整行内容。", "err");
+        if (input) input.focus();
+        return;
+      }
+      await withButton(btn, "验证中…", async () => {
+        const row = await callAPI("/plugins/u1s1/checkin/cookie", {
+          method: "POST", body: JSON.stringify({ auth_index: ai, cookie }),
+        });
+        if (input) input.value = "";
+        // Saving is only half of what the user wants; if today is still
+        // unclaimed, claim it now instead of making them click again.
+        if (row && row.today_claimed) {
+          showMsg(`会话已保存（${row.email || ai}），今日已签到，无需补签。`, "ok");
+        } else {
+          const data = await callAPI("/plugins/u1s1/checkin/run?auth_index=" + encodeURIComponent(ai), { method: "POST" });
+          const r = (data.results || [])[0];
+          const ok = r && (r.status === "ok" || r.status === "already");
+          showMsg(`会话已保存。${r ? (r.message || r.status) : ""}`, ok ? "ok" : "warn");
+        }
+      });
+      checkinLive = true;
+      await switchView("checkin", { force: true });
+      return;
+    }
+
+    if (act === "run") {
+      const r = await doRun(ai, btn);
+      if (r && (r.status === "ok" || r.status === "already")) {
+        checkinLive = true;
+        // Re-render to pick up the fresh status, but only if the user is still
+        // on this view — a slow network must not drag them back here after they
+        // navigated away in the 800ms window.
+        setTimeout(() => { if (activeView === "checkin") switchView("checkin", { force: true }); }, 800);
+      }
+      return;
+    }
+
+    if (act === "run-all") {
+      await withButton(btn, "全部签到中…", async () => {
+        const data = await callAPI("/plugins/u1s1/checkin/run", { method: "POST" });
+        const results = data.results || [];
+        const ok = results.filter(r => r.status === "ok" || r.status === "already").length;
+        const lines = results.map(r => `${r.email || r.name}: ${r.message || r.status}`).join("\n");
+        showMsg(`${ok} / ${results.length} 个账号完成。\n${lines}`, ok === results.length ? "ok" : "warn");
+        results.forEach(r => setSlot(r.auth_index, r.message || r.status, RUN_KIND[r.status] || "err"));
+      });
+      // Re-render so the header's 今日计数 reflects the runs just performed
+      // (mirrors the single-account run path). The slot lines are lost in the
+      // re-render, but the message bar above keeps the per-account outcomes.
+      checkinLive = true;
+      await switchView("checkin", { force: true });
+      return;
+    }
+
+    if (act === "live") {
+      checkinLive = true;
+      await switchView("checkin", { force: true });
+      return;
+    }
+
+    // Clearing drops the only credential the scheduler has; arm on first click
+    // so a misclick cannot silently disable the daily check-in.
+    if (act === "clear") {
+      if (btn.getAttribute("data-armed") !== "1") {
+        btn.setAttribute("data-armed", "1");
+        const old = btn.textContent;
+        btn.textContent = "确认清除？";
+        setSlot(ai, "再点一次确认清除该账号的会话 Cookie，自动签到会随之停止。", "err");
+        setTimeout(() => {
+          if (btn.getAttribute("data-armed") === "1") {
+            btn.removeAttribute("data-armed");
+            btn.textContent = old;
+            setSlot(ai, "");
+          }
+        }, 5000);
+        return;
+      }
+      btn.removeAttribute("data-armed");
+      await withButton(btn, "清除中…", () =>
+        callAPI("/plugins/u1s1/checkin/cookie?auth_index=" + encodeURIComponent(ai), { method: "DELETE" }));
+      showMsg("会话 Cookie 已清除，该账号的自动签到已停止。", "warn");
+      await switchView("checkin", { force: true });
+      return;
+    }
   } catch (e) {
-    if (e.needKey) renderLogin(e.message === "missing management key" ? "" : e.message);
-    else root.innerHTML = `<div class="card err">加载失败：${esc(e.message)}</div>`;
-  } finally {
-    loading = false;
-    btn.disabled = false;
-    btn.textContent = label;
+    if (e.needKey) { renderLogin(e.message === "missing management key" ? "" : e.message); return; }
+    if (ai) setSlot(ai, e.message, "err");
+    showMsg(e.message, "err");
   }
 }
 
-function bindCheckinActions() {
-  const root = document.getElementById("root");
-  const flash = (btn, text) => { const old = btn.textContent; btn.textContent = text; btn.disabled = true; setTimeout(() => { btn.textContent = old; btn.disabled = false; }, 2000); };
-  root.querySelectorAll("[data-checkin-save]").forEach(btn => {
-    btn.onclick = async () => {
-      const ai = btn.getAttribute("data-checkin-save");
-      const input = root.querySelector(`[data-checkin-cookie="${ai}"]`);
-      const cookie = input ? input.value.trim() : "";
-      if (!cookie) { flash(btn, "先粘贴 Cookie"); return; }
-      flash(btn, "验证中…");
-      try {
-        await callAPI("/plugins/u1s1/checkin/cookie", { method: "POST", body: JSON.stringify({ auth_index: ai, cookie }) });
-        loadCheckin();
-      } catch (e) {
-        flash(btn, e.message);
-      }
-    };
-  });
-  root.querySelectorAll("[data-checkin-clear]").forEach(btn => {
-    btn.onclick = async () => {
-      const ai = btn.getAttribute("data-checkin-clear");
-      flash(btn, "清除中…");
-      try {
-        await callAPI("/plugins/u1s1/checkin/cookie?auth_index=" + encodeURIComponent(ai), { method: "DELETE" });
-        loadCheckin();
-      } catch (e) { flash(btn, e.message); }
-    };
-  });
-  root.querySelectorAll("[data-checkin-run]").forEach(btn => {
-    btn.onclick = async () => {
-      const ai = btn.getAttribute("data-checkin-run");
-      flash(btn, "签到中…");
-      try {
-        const data = await callAPI("/plugins/u1s1/checkin/run?auth_index=" + encodeURIComponent(ai), { method: "POST" });
-        const r = (data.results || [])[0];
-        flash(btn, r ? (r.message || r.status) : "完成");
-        setTimeout(loadCheckin, 1500);
-      } catch (e) { flash(btn, e.message); }
-    };
-  });
+/* ---- wiring ------------------------------------------------------------ */
+document.getElementById("root").addEventListener("click", onRootClick);
+for (const [name, v] of Object.entries(VIEWS)) {
+  document.getElementById(v.tab).onclick = () => switchView(name, { noReload: true });
 }
+// Refresh acts on the current view only; navigation is the tabs' job. Previously
+// this button doubled as "go back to quota", which spent a /v1/me call on what
+// the user meant as a view switch.
+document.getElementById("refresh").onclick = () => switchView(activeView, { force: true, skeleton: true });
+document.addEventListener("keydown", e => {
+  // Arrow keys move between tabs when a tab has focus (tablist convention).
+  const tabs = Object.values(VIEWS).map(v => v.tab);
+  const idx = tabs.indexOf(document.activeElement && document.activeElement.id);
+  if (idx < 0 || (e.key !== "ArrowRight" && e.key !== "ArrowLeft")) return;
+  e.preventDefault();
+  const next = (idx + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
+  const name = Object.keys(VIEWS)[next];
+  document.getElementById(tabs[next]).focus();
+  switchView(name);
+});
 
-document.getElementById("checkin").onclick = () => loadCheckin();
 if (window.__u1s1ThemeSync) window.__u1s1ThemeSync();
-load();
+switchView("usage");
 </script>
 </body>
 </html>

@@ -375,7 +375,9 @@ func TestRunCheckinForNoCookie(t *testing.T) {
 }
 
 func TestRunCheckinForStaleCookieRejected(t *testing.T) {
-	// No cookie in the handler => /api/me 401 => the run reports a login error.
+	// No cookie in the handler => /api/me 401 => the run records the dedicated
+	// auth_expired status (the panel renders it as 会话已失效) rather than the
+	// generic error.
 	handler := &checkinWebHandler{}
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
@@ -383,8 +385,8 @@ func TestRunCheckinForStaleCookieRejected(t *testing.T) {
 	credPath := filepath.Join(dir, "u1s1-user-example.com.json")
 	_ = saveCheckinSidecar(checkinSidecarPath(credPath), &checkinSidecar{Cookie: "session=stale"})
 	state := runCheckinFor(srv.URL, "", credPath, "")
-	if state.Status != "error" || !strings.Contains(state.Message, "重新登录") {
-		t.Fatalf("status = %s (%s), want login error", state.Status, state.Message)
+	if state.Status != "auth_expired" || !strings.Contains(state.Message, "重新登录") {
+		t.Fatalf("status = %s (%s), want auth_expired login error", state.Status, state.Message)
 	}
 }
 
@@ -423,5 +425,162 @@ func TestCheckinStatusEndpointWithoutHostBridge(t *testing.T) {
 	unwrapResult(t, raw, &resp)
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502 (no host bridge)", resp.StatusCode)
+	}
+}
+
+// TestIsTruthyQueryAcceptsHandTypedFlags pins the management query-flag parsing.
+// The panel always sends "1", but these routes are also driven by hand with
+// curl, where "true" is the natural thing to type; a strict == "1" made a
+// mistyped flag silently mean "off".
+func TestIsTruthyQueryAcceptsHandTypedFlags(t *testing.T) {
+	for _, v := range []string{"1", "true", "TRUE", "yes", "on", " 1 "} {
+		if !isTruthyQuery(v) {
+			t.Fatalf("isTruthyQuery(%q) = false, want true", v)
+		}
+	}
+	for _, v := range []string{"", "0", "false", "no", "off", "banana"} {
+		if isTruthyQuery(v) {
+			t.Fatalf("isTruthyQuery(%q) = true, want false", v)
+		}
+	}
+}
+
+// TestApplyLiveCheckinCopiesWebsiteFields verifies the panel row carries the
+// whole login_checkin object. Before this the plugin decoded streak, cycle, and
+// milestone fields and then dropped everything except claimed_today, so the
+// panel could not answer "am I on a streak" without the user opening the site.
+func TestApplyLiveCheckinCopiesWebsiteFields(t *testing.T) {
+	var row checkinAccountRow
+	row.applyLiveCheckin(&webLoginCheckin{
+		Tokens:              2000000,
+		ValidDays:           30,
+		ClaimedToday:        true,
+		Streak:              7,
+		LongestStreak:       12,
+		CycleDays:           30,
+		CycleDay:            7,
+		NextMilestoneDay:    14,
+		NextMilestoneTokens: 5000000,
+		PhoneRequired:       true,
+	})
+	if !row.TodayClaimed || row.Streak != 7 || row.LongestStreak != 12 {
+		t.Fatalf("streak fields not copied: %+v", row)
+	}
+	if row.CycleDay != 7 || row.CycleDays != 30 {
+		t.Fatalf("cycle fields not copied: %+v", row)
+	}
+	if row.NextMilestoneDay != 14 || row.NextMilestoneTokens != 5000000 {
+		t.Fatalf("milestone fields not copied: %+v", row)
+	}
+	if row.TodayTokens != 2000000 || row.ValidDays != 30 || !row.PhoneRequired {
+		t.Fatalf("reward/phone fields not copied: %+v", row)
+	}
+	// A nil login_checkin (older site payload) must leave the row untouched
+	// rather than zeroing fields a caller already set.
+	row.applyLiveCheckin(nil)
+	if row.Streak != 7 {
+		t.Fatalf("nil login_checkin clobbered the row: %+v", row)
+	}
+}
+
+// TestCheckinStatusLocalReadMakesNoWebRequest pins the default status route as
+// network-free. The quota view polls this route for its attention badge, so a
+// per-account /api/me here would turn a background hint into a standing cost.
+func TestCheckinStatusLocalReadMakesNoWebRequest(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	setWebOrigin(t, srv.URL)
+
+	// No host bridge in unit tests, so enumeration fails; what matters is that
+	// the non-live path reached that failure without touching the website.
+	if _, err := handleCheckinStatus(false, ""); err == nil {
+		t.Fatal("expected host.auth.list to fail without a bridge")
+	}
+	if hits != 0 {
+		t.Fatalf("non-live status made %d web request(s), want 0", hits)
+	}
+}
+
+// TestFillCheckinRowNonLiveMakesNoWebRequest pins the same zero-network rule at
+// the row level: live is the only thing that may touch the website.
+func TestFillCheckinRowNonLiveMakesNoWebRequest(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
+	defer srv.Close()
+	var row checkinAccountRow
+	row.NeedsLogin = true
+	fillCheckinRow(&row, &checkinSidecar{Cookie: "session=good"}, false, srv.URL, "")
+	if hits != 0 {
+		t.Fatalf("non-live fill made %d web request(s), want 0", hits)
+	}
+	if !row.CookieSet || row.NeedsLogin {
+		t.Fatalf("cookie presence must still be reported: %+v", row)
+	}
+}
+
+// TestFillCheckinRowLive401FlipsNeedsLogin pins the review finding: a live read
+// hitting an expired session must surface in the panel's attention badge
+// (needs_login) — exactly the case that must not wait for the user to open the
+// check-in view to look for it.
+func TestFillCheckinRowLive401FlipsNeedsLogin(t *testing.T) {
+	srv := httptest.NewServer(&checkinWebHandler{})
+	defer srv.Close()
+	var row checkinAccountRow
+	row.NeedsLogin = true
+	fillCheckinRow(&row, &checkinSidecar{Cookie: "session=stale"}, true, srv.URL, "")
+	if !row.NeedsLogin {
+		t.Fatal("live 401 must flip needs_login so the attention badge fires")
+	}
+	if !row.CookieSet {
+		t.Fatal("cookie presence is unaffected by the session being stale")
+	}
+	if row.LiveError == "" || !strings.Contains(row.LiveError, "重新登录") {
+		t.Fatalf("live_error = %q, want the session-expired hint", row.LiveError)
+	}
+}
+
+// TestFillCheckinRowLiveSuccessCopiesMeFields verifies a healthy live read
+// replaces the local-only row with the website's authoritative state.
+func TestFillCheckinRowLiveSuccessCopiesMeFields(t *testing.T) {
+	srv := httptest.NewServer(&checkinWebHandler{claimedToday: true, meEmail: "live@example.com"})
+	defer srv.Close()
+	var row checkinAccountRow
+	row.NeedsLogin = true
+	fillCheckinRow(&row, &checkinSidecar{Cookie: "session=good"}, true, srv.URL, "")
+	if row.NeedsLogin {
+		t.Fatal("valid session must clear needs_login")
+	}
+	if row.Email != "live@example.com" {
+		t.Fatalf("email = %q, want the /api/me email", row.Email)
+	}
+	if !row.TodayClaimed || row.Streak != 3 || row.TodayTokens != 2000000 {
+		t.Fatalf("live checkin fields not applied: %+v", row)
+	}
+	if row.LiveError != "" {
+		t.Fatalf("live_error = %q on a successful read", row.LiveError)
+	}
+}
+
+// TestFillCheckinRowLiveUpstreamErrorKeepsSession separates an upstream failure
+// from an expired session: a 500 must keep needs_login false (the cookie is
+// still configured) while live_error explains why the row shows local data.
+func TestFillCheckinRowLiveUpstreamErrorKeepsSession(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	var row checkinAccountRow
+	row.NeedsLogin = true
+	fillCheckinRow(&row, &checkinSidecar{Cookie: "session=good"}, true, srv.URL, "")
+	if row.NeedsLogin {
+		t.Fatal("upstream 500 must not be treated as an expired session")
+	}
+	if row.LiveError == "" {
+		t.Fatal("live_error must carry the upstream failure")
 	}
 }
