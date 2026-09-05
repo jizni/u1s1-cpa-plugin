@@ -43,7 +43,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           CGO_ENABLED=1 go build -buildmode=c-shared -trimpath \
             -ldflags "-s -w -X main.pluginVersion=$VERSION" \
-            -o dist/u1s1.so .
+            -buildvcs=false -o dist/u1s1.so .
 
       - name: Verify glibc compatibility (must be ≤ 2.36)
         run: scripts/glibc-check.sh

@@ -70,7 +70,9 @@ wire 层（按网关端点一文件：`gateway_models.go` / `gateway_me.go` / `g
   `node:22-bookworm` 容器（Debian 12 / glibc 2.36，与目标一致；同时提供 checkout /
   setup-go 等 JS action 需要的 Node）构建 + glibc 门禁 + 单测，产物 `u1s1.so` +
   `u1s1.so.sha256` 挂 GitHub Release。不依赖具体 runner 镜像（ubuntu-22.04 已进弃用
-  窗口），容器内构建保证符号需求不超 2.36。
+  窗口），容器内构建保证符号需求不超 2.36。构建加 `-buildvcs=false`：容器 job 里
+  checkout 的仓库所有者与容器用户不一致，go 的 VCS 打戳会报 `error obtaining VCS
+  status`（版本号本来就由 ldflags 注入，VCS 信息没用）。
 - **替换需重启容器**：宿主只在插件**文件路径变化**时重建插件，覆盖同名 `u1s1.so` +
   touch config.yaml 不会重载（宿主仍持旧库 inode）。替换后必须
   `docker restart cli-proxy-api`，重启后核对日志确认新版本已注册、模型重新注册。

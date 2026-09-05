@@ -27,7 +27,8 @@ all: build
 build:
 	mkdir -p $(DIST)
 	CGO_ENABLED=1 $(GO) build -buildmode=c-shared -trimpath \
-		-ldflags "$(LDFLAGS) -X main.pluginVersion=$(VERSION)" -o $(PLUGIN) .
+		-ldflags "$(LDFLAGS) -X main.pluginVersion=$(VERSION)" \
+		-buildvcs=false -o $(PLUGIN) .
 	@echo "built $(PLUGIN) (version $(VERSION))"
 	@$(MAKE) glibc-check GLIBC_SO=$(PLUGIN)
 
