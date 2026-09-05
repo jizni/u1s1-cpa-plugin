@@ -267,8 +267,6 @@ func TestCheckinSidecarMigratesLegacyJSON(t *testing.T) {
 	}
 }
 
-// TestCheckinStatusEndpointRejectsMissingKey exercises the management route's
-
 // checkinWebHandler fakes the website /api routes: /api/me reports claimed_today
 // and /api/packages/login-checkin/claim records the request and returns success.
 type checkinWebHandler struct {

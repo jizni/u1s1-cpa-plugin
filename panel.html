@@ -568,7 +568,14 @@ async function probeCheckinAttention() {
     const data = await callAPI("/plugins/u1s1/checkin/status");
     const stale = (data.accounts || []).filter(a => a.needs_login || !a.cookie_set);
     markCheckinAttention(stale.length > 0);
-    if (stale.length && activeView === "usage") {
+    if (!stale.length) {
+      // Roster cleared: reset the suppression key so the same accounts failing
+      // again later in this session surface a fresh warning instead of being
+      // swallowed as "already warned".
+      warnedStaleKey = "";
+      return;
+    }
+    if (activeView === "usage") {
       const key = stale.map(a => a.email || a.name).join("|");
       if (key === warnedStaleKey) return;
       warnedStaleKey = key;
@@ -751,7 +758,6 @@ function renderCheckin(data) {
     </div>
     <div class="row-actions">
       <button data-act="run-all">全部签到</button>
-      ${data.live ? "" : `<button data-act="live" class="sec">读取实时状态</button>`}
     </div>
     ${data.enabled ? "" : '<div class="note">配置 <code>checkin-enabled: true</code> 可重新开启自动签到；手动签到不受影响。</div>'}
     <div class="slot" data-slot="__all__"></div>
@@ -760,16 +766,18 @@ function renderCheckin(data) {
 }
 
 // live=1 asks the status route for a real /api/me read (today_claimed, streak).
-// Defaults on: the check-in view's whole point is answering "did today's claim
+// Always on: the check-in view's whole point is answering "did today's claim
 // happen", which only a live read does authoritatively. The quota view's
 // attention badge polls this route separately without live, so it stays
 // network-free; and live mode degrades per-account (live_error) instead of
 // failing the whole view, so an unreachable site costs latency, not a broken
-// page. Accounts without a cookie never trigger a web call.
-let checkinLive = true;
+// page. Accounts without a cookie never trigger a web call. (The old
+// checkinLive switch and its "读取实时状态" button were removed as dead code:
+// nothing ever set the switch back to false, so the button could not render.
+// git history keeps the local-mode variant for the day it is needed.)
 
 async function loadCheckin({ signal }) {
-  const data = await callAPI("/plugins/u1s1/checkin/status" + (checkinLive ? "?live=1" : ""), { signal });
+  const data = await callAPI("/plugins/u1s1/checkin/status?live=1", { signal });
   document.getElementById("root").innerHTML = renderCheckin(data);
   const stale = (data.accounts || []).filter(a => a.needs_login || !a.cookie_set);
   markCheckinAttention(stale.length > 0);
@@ -854,7 +862,6 @@ async function onRootClick(ev) {
           showMsg(`会话已保存。${r ? (r.message || r.status) : ""}`, ok ? "ok" : "warn");
         }
       });
-      checkinLive = true;
       await switchView("checkin", { force: true });
       return;
     }
@@ -862,7 +869,6 @@ async function onRootClick(ev) {
     if (act === "run") {
       const r = await doRun(ai, btn);
       if (r && (r.status === "ok" || r.status === "already")) {
-        checkinLive = true;
         // Re-render to pick up the fresh status, but only if the user is still
         // on this view — a slow network must not drag them back here after they
         // navigated away in the 800ms window.
@@ -883,13 +889,6 @@ async function onRootClick(ev) {
       // Re-render so the header's 今日计数 reflects the runs just performed
       // (mirrors the single-account run path). The slot lines are lost in the
       // re-render, but the message bar above keeps the per-account outcomes.
-      checkinLive = true;
-      await switchView("checkin", { force: true });
-      return;
-    }
-
-    if (act === "live") {
-      checkinLive = true;
       await switchView("checkin", { force: true });
       return;
     }

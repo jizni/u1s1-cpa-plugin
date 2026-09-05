@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,28 @@ func TestIsTransientCancel(t *testing.T) {
 	}
 	if isTransientCancel(nil) {
 		t.Fatal("nil must not count as transient")
+	}
+}
+
+// TestPanelExposesAllViews pins the panel's three views (usage / check-in /
+// diagnostics) and the message bar. The views are the page's primary state:
+// a refactor that drops one of them — say, renames tab-diag and nobody notices
+// because the diagnostics route itself is tested separately — must turn red
+// here. Upstream text reaches the diagnostics table, so the renderer must also
+// stay on the escaper.
+func TestPanelExposesAllViews(t *testing.T) {
+	body := string(renderPanel())
+	for _, needle := range []string{
+		`id="tab-usage"`, `id="tab-checkin"`, `id="tab-diag"`,
+		"/plugins/u1s1/diagnostics", "/plugins/u1s1/checkin/status",
+		"loadUsage", "loadCheckin", "loadDiagnostics", `id="msg"`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("panel missing %q", needle)
+		}
+	}
+	if !strings.Contains(body, "esc(e.message") {
+		t.Fatal("diagnostics rows must escape the gateway message")
 	}
 }
 
