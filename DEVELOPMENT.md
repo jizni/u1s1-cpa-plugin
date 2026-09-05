@@ -643,6 +643,31 @@ diagnostics 形态，确认不出 `undefined` / `NaN`，并断言上游文本经
 
 ---
 
+## 8.3 跟进 u1s1-cli 1.8.1（2026-09-05）
+
+1.5.0 → 1.8.1 中间跨了 1.6.0 / 1.7.0 / 1.7.1 / 1.8.0 / 1.8.1 五个版本，逐版对照了五份
+`dist/`（模块清单 + `api.js` / `device-auth.js` / `usage.js` / `model.js` 的路由与头部）。
+
+### 已跟进
+
+**`client-version` → `1.8.1`**（唯一影响线上可用性的项）。其余指纹逐项核实无变化：
+pi-coding-agent 仍 0.84.4、openai SDK 仍 6.40.0、node 仍 v22.23.2；`x-u1s1-platform`
+（1.8.x 签名代理新增）插件早已在 `headers.go` 硬编码 `linux-x64`，与官方
+`${process.platform}-${process.arch}` 在本机一致。无新增网关路由：`api.js` / `device-auth.js`
+的端点在 1.5.0 与 1.8.1 之间完全一致（`/v1/models`、`/v1/me`、`/v1/endpoints`、
+`/public/announcements/latest`、打卡 claim）。
+
+### 明确不跟进
+
+| 变更 | 不跟进理由 |
+| --- | --- |
+| `mcp/*`（client / command / config / extension / tools） | pi 宿主侧的 MCP 子命令与扩展加载，插件没有对应面 |
+| `import/skills.js` | 历史会话导入新格式；插件凭证由宿主落盘，无导入路径 |
+| `shortcut.js` | CLI 的快捷命令功能，纯终端交互 |
+| `/v1/endpoints`（自定义模型端点） | dashboard 侧的用户配置，由 CLI 拉取后本地缓存；插件模型目录只认 `/v1/models`，不代理该路由 |
+
+---
+
 ## 9. 每日打卡（已实现，2026-09-04）
 
 网页版签到端点 `POST https://u1s1.io/api/packages/login-checkin/claim`（注意是
