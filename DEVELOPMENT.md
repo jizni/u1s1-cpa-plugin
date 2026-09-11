@@ -308,12 +308,12 @@ CLI 的 `usageCtaLines()` 充值/邀请入口是付费客户端自己的提醒�
 **唯一影响线上可用性的活规则：`client-version` 必须随真实 CLI 发布版本升级**
 （`config.go:defaultClientVersion` + README 配置表）——网关完整性检查会提示"升级并重新
 登录 u1s1"。`TestClientVersionLooksLikeARelease` 钉住形状（三段数字 / SDK x.y.z / node
-vX.Y.Z），让改常量成为有意的编辑。历次跟进（1.4.1 / 1.5.0 / 1.8.1 / 1.9.0 逐版对照的全文）在 git
+vX.Y.Z），让改常量成为有意的编辑。历次跟进（1.4.1 / 1.5.0 / 1.8.1 / 1.9.0 / 1.9.1 逐版对照的全文）在 git
 历史，此处只留汇总：
 
 | 已跟进 | 说明 |
 |---|---|
-| `client-version` → 1.4.1 / 1.5.0 / 1.8.1 / 1.9.0 | 每次唯一影响可用性的项；其余指纹核实无变化：pi-coding-agent 0.84.4、openai SDK 6.40.0、node v22.23.2。1.9.0 全量 diff 过：改动全在 UI/UX（cwd 提醒、账号显示、web_fetch 分页、免费包文案），`device-auth.js`（签名代理与指纹）与 `api.js` 逐字节相同 |
+| `client-version` → 1.4.1 / 1.5.0 / 1.8.1 / 1.9.0 / 1.9.1 | 每次唯一影响可用性的项；其余指纹核实无变化：pi-coding-agent 0.84.4、openai SDK 6.40.0、node v22.23.2。1.9.0 全量 diff 过：改动全在 UI/UX（cwd 提醒、账号显示、web_fetch 分页、免费包文案），`device-auth.js`（签名代理与指纹）与 `api.js` 逐字节相同。1.9.1 全量 diff 过：整棵树只有 3 个文件变化（`package.json` / `.package-lock.json` 的版本号 + `dist/tools.js` 一行 `promptSnippet` 中文改英文），`node_modules` 逐字节相同 |
 | 错误文本 `(HTTP 429 · code · 请求编号 …)` + `insufficient_quota` 归一 | `errorTail()` |
 | `free_package_eligible` 纳入模型说明 | §5 |
 | 面板向 `u1s1 usage` 新口径对齐（Token 为主、`login_checkin_bonus` 标签、`free_claim` 角标） | §6 |
