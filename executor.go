@@ -53,7 +53,7 @@ func prepareBody(payload, original []byte, model string, stream bool) []byte {
 		return body
 	}
 	// The host strips the auth prefix but leaves any thinking suffix on the model
-	// id; sending "deepseek-v4-flash(high)" upstream is a 400.
+	// id; sending "deepseek-flash(high)" upstream is a 400.
 	baseModel, rawSuffix, hasSuffix := parseModelSuffix(model)
 	if strings.TrimSpace(baseModel) != "" {
 		obj["model"] = baseModel

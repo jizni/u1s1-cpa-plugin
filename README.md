@@ -101,7 +101,7 @@ plugins:
 | --- | --- | --- |
 | `base-url` | `https://api.u1s1.io/v1` | 网关基础 URL（鉴权路由挂在 origin 根路径下）。 |
 | `client` | `terminal` | `x-u1s1-client` 的值。 |
-| `client-version` | `1.9.1` | `x-u1s1-version` 的值;需与真实 CLI 发布版本保持一致。 |
+| `client-version` | `1.11.0` | `x-u1s1-version` 的值;需与真实 CLI 发布版本保持一致。 |
 | `user-agent` | `pi (linux ...; x64)` | 必须保持 `pi (...)` 指纹。 |
 | `web-origin` | `https://u1s1.io` | 网站 origin：`/api/me`、打卡领取接口所在（与网关 `api.u1s1.io` 不同宿主，用会话 Cookie 鉴权）。 |
 | `checkin-enabled` | `true` | 是否运行每日打卡调度器。 |
@@ -134,7 +134,7 @@ attestation 令牌。也可以把官方 CLI 的 `~/.u1s1/config.json` 直接放�
 
 ## 模型前缀
 
-u1s1 的模型 id（`deepseek-v4-flash`、`glm-5.3-flash` 等）会与其他 provider 冲突。
+u1s1 的模型 id（`deepseek-flash`、`glm-5.3-flash` 等）会与其他 provider 冲突。
 设置前缀让两边都能访问：
 
 ```bash
@@ -143,7 +143,7 @@ curl -X PATCH -H "Authorization: Bearer $MGMT_KEY" -H "Content-Type: application
   http://127.0.0.1:8317/v0/management/auth-files/fields
 ```
 
-之后模型会注册为 `u1s1/deepseek-v4-flash` 等。CPA 默认会**同时**注册裸 id 和带前缀的
+之后模型会注册为 `u1s1/deepseek-flash` 等。CPA 默认会**同时**注册裸 id 和带前缀的
 id（模型数量翻倍），只保留带前缀的形式需设置宿主级开关：
 
 ```yaml
@@ -158,7 +158,7 @@ force-model-prefix: true
 声明了 `thinking.levels` 的模型支持 CPA 的思考强度后缀：
 
 ```
-u1s1/deepseek-v4-flash(high)
+u1s1/deepseek-flash(high)
 u1s1/glm-5.3-flash(max)
 u1s1/qwen3.8-flash(off)
 ```

@@ -1,7 +1,7 @@
 // thinking.go resolves the host's model thinking suffix.
 //
 // The plugin advertises per-model reasoning levels in model.for_auth, so clients
-// may request "u1s1/deepseek-v4-flash(high)". The host strips only the auth
+// may request "u1s1/deepseek-flash(high)". The host strips only the auth
 // prefix (rewriteModelForAuth) and leaves the suffix on req.Model: every native
 // CPA executor calls thinking.ParseSuffix() itself. Forwarding the suffixed id
 // verbatim makes the gateway answer 400 unknown model, so the plugin has to

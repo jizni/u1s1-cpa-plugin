@@ -127,8 +127,10 @@ func toModelInfo(m gatewayModel, description string) pluginapi.ModelInfo {
 
 // defaultFreeModelID is the gateway's own reference model for quota accounting
 // (/v1/me reports daily_free_model), and the CLI's built-in default. Price
-// multiples in model notes are relative to it.
-const defaultFreeModelID = "deepseek-v4-flash"
+// multiples in model notes are relative to it. DeepSeek unified the id on
+// 2026-09-10 (u1s1-cli 1.11.0): the catalog now lists deepseek-flash, and the
+// old deepseek-v4-flash survives only as a "legacy id, update CLI" alias.
+const defaultFreeModelID = "deepseek-flash"
 
 // baseModelBlendedPrice returns the blended price the "N times the default
 // model" note compares against: the default free model, else the first

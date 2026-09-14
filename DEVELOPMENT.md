@@ -178,7 +178,8 @@ attributes；该值必须小于 `attestationUnknownTTL − attestationRefreshMar
 | `price_bands` | 峰/闲价两档 + `current` 指出此刻生效的那一档 |
 
 拼出「免费用量包可抵扣 · $0.22/$0.66 每百万 token（峰/闲价 · 当前闲时价）」；倍数的基准
-是 `daily_free_model`（`deepseek-v4-flash`，也是 CLI 默认模型），按 `(input + output) / 2`
+是 `daily_free_model`（`deepseek-flash`，也是 CLI 默认模型；DeepSeek 2026-09-10 起统一该
+id，旧 `deepseek-v4-flash` 仍由网关按别名下发并标注 legacy），按 `(input + output) / 2`
 混合价比较，与 CLI 的 `deriveModelNote` 同一算法；不足 2 倍只说"不走免费包"（四舍五入
 出来的"1 倍"是噪音）。`free_package_eligible` 缺失时**不产生**覆盖结论——猜"覆盖"会白烧
 余额，猜"不覆盖"让人不敢用免费模型。价格用 `strconv.FormatFloat(v, 'f', -1, 64)` 打印
@@ -190,7 +191,7 @@ attributes；该值必须小于 `attestationUnknownTTL − attestationRefreshMar
 
 ### thinking 后缀
 
-宿主只剥前缀，**后缀原样留在 `req.Model`** 里（`u1s1/deepseek-v4-flash(high)`），直接
+宿主只剥前缀，**后缀原样留在 `req.Model`** 里（`u1s1/deepseek-flash(high)`），直接
 转发会被网关 400 unknown model 拒掉。`thinking.go` 拆后缀，并按该模型的
 `request_format` 写上游字段（与官方 pi 客户端 `openai-completions` 适配层一致）：
 
@@ -308,12 +309,12 @@ CLI 的 `usageCtaLines()` 充值/邀请入口是付费客户端自己的提醒�
 **唯一影响线上可用性的活规则：`client-version` 必须随真实 CLI 发布版本升级**
 （`config.go:defaultClientVersion` + README 配置表）——网关完整性检查会提示"升级并重新
 登录 u1s1"。`TestClientVersionLooksLikeARelease` 钉住形状（三段数字 / SDK x.y.z / node
-vX.Y.Z），让改常量成为有意的编辑。历次跟进（1.4.1 / 1.5.0 / 1.8.1 / 1.9.0 / 1.9.1 逐版对照的全文）在 git
-历史，此处只留汇总：
+vX.Y.Z），让改常量成为有意的编辑。历次跟进（1.4.1 / 1.5.0 / 1.8.1 / 1.9.0 / 1.9.1 / 1.11.0 逐版
+对照的全文）在 git 历史，此处只留汇总：
 
 | 已跟进 | 说明 |
 |---|---|
-| `client-version` → 1.4.1 / 1.5.0 / 1.8.1 / 1.9.0 / 1.9.1 | 每次唯一影响可用性的项；其余指纹核实无变化：pi-coding-agent 0.84.4、openai SDK 6.40.0、node v22.23.2。1.9.0 全量 diff 过：改动全在 UI/UX（cwd 提醒、账号显示、web_fetch 分页、免费包文案），`device-auth.js`（签名代理与指纹）与 `api.js` 逐字节相同。1.9.1 全量 diff 过：整棵树只有 3 个文件变化（`package.json` / `.package-lock.json` 的版本号 + `dist/tools.js` 一行 `promptSnippet` 中文改英文），`node_modules` 逐字节相同 |
+| `client-version` → 1.4.1 / 1.5.0 / 1.8.1 / 1.9.0 / 1.9.1 / 1.11.0 | 每次唯一影响可用性的项；其余指纹核实无变化：pi-coding-agent 0.84.4、openai SDK 6.40.0、node v22.23.2。1.9.0 全量 diff 过：改动全在 UI/UX（cwd 提醒、账号显示、web_fetch 分页、免费包文案），`device-auth.js`（签名代理与指纹）与 `api.js` 逐字节相同。1.9.1 全量 diff 过：整棵树只有 3 个文件变化（`package.json` / `.package-lock.json` 的版本号 + `dist/tools.js` 一行 `promptSnippet` 中文改英文），`node_modules` 逐字节相同。1.11.0 全量 diff 过：8 个文件变化（版本号、`usage.js` 免费包文案、`config.js`/`agent-setup.js`/`index.js`/`subagent.js` 的自动压缩与 `/context`、新增 `context-usage.js`），`device-auth.js`/`api.js`/`node_modules`/node 二进制逐字节相同；默认模型 id 由 `deepseek-v4-flash` 改为 `deepseek-flash`（旧 id 网关按别名保留），其 `vision` 转 true（§5） |
 | 错误文本 `(HTTP 429 · code · 请求编号 …)` + `insufficient_quota` 归一 | `errorTail()` |
 | `free_package_eligible` 纳入模型说明 | §5 |
 | 面板向 `u1s1 usage` 新口径对齐（Token 为主、`login_checkin_bonus` 标签、`free_claim` 角标） | §6 |
