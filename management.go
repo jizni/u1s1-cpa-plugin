@@ -83,7 +83,7 @@ func managementRegistration() managementRegistrationResponse {
 			{Method: http.MethodPost, Path: base + "/refresh", Description: "Drop the cached quota snapshot and re-read /v1/me."},
 			{Method: http.MethodGet, Path: base + "/diagnostics", Description: "Recent upstream failures with their gateway request ids, for support reports."},
 			{Method: http.MethodGet, Path: base + "/checkin/status", Description: "Per-credential daily login check-in state: cookie presence and last run."},
-			{Method: http.MethodPost, Path: base + "/checkin/cookie", Description: "Validate and store a u1s1.io browser session cookie for one credential (body: auth_index + cookie)."},
+			{Method: http.MethodPost, Path: base + "/checkin/cookie", Description: "Validate and store a u1s1app.com browser session cookie for one credential (body: auth_index + cookie)."},
 			{Method: http.MethodDelete, Path: base + "/checkin/cookie", Description: "Remove the stored check-in cookie for one credential (query: auth_index)."},
 			{Method: http.MethodPost, Path: base + "/checkin/run", Description: "Trigger an immediate check-in for one credential or all (query: auth_index)."},
 		},

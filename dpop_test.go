@@ -19,7 +19,7 @@ func TestDPoPProofVerifies(t *testing.T) {
 		t.Fatalf("generateDeviceKeyPair() error = %v", err)
 	}
 	token := "u1s1d-" + strings.Repeat("a", 64)
-	headers, err := dpopHeaders(token, pair.Private, pair.Public, "post", "https://api.u1s1.io/v1/chat/completions?x=1#frag")
+	headers, err := dpopHeaders(token, pair.Private, pair.Public, "post", "https://api.u1s1app.com/v1/chat/completions?x=1#frag")
 	if err != nil {
 		t.Fatalf("dpopHeaders() error = %v", err)
 	}
@@ -58,7 +58,7 @@ func TestDPoPProofVerifies(t *testing.T) {
 	if payload.HTM != "POST" {
 		t.Fatalf("htm = %q, want POST (uppercased)", payload.HTM)
 	}
-	if payload.HTU != "https://api.u1s1.io/v1/chat/completions" {
+	if payload.HTU != "https://api.u1s1app.com/v1/chat/completions" {
 		t.Fatalf("htu = %q, query and fragment must be stripped", payload.HTU)
 	}
 	if strings.Contains(payload.JTI, "-") || len(payload.JTI) != 32 {
@@ -108,7 +108,7 @@ func TestDPoPRejectsBadToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateDeviceKeyPair() error = %v", err)
 	}
-	if _, err := dpopHeaders("nope-1234", pair.Private, pair.Public, "GET", "https://api.u1s1.io/v1/me"); err == nil {
+	if _, err := dpopHeaders("nope-1234", pair.Private, pair.Public, "GET", "https://api.u1s1app.com/v1/me"); err == nil {
 		t.Fatal("expected an error for a token without the u1s1d- prefix")
 	}
 }
@@ -160,7 +160,7 @@ func TestClientVersionLooksLikeARelease(t *testing.T) {
 
 func TestSignedHeadersIncludeAttestation(t *testing.T) {
 	sa := testStoredAuth(t)
-	headers, err := signedHeaders(sa, "POST", "https://api.u1s1.io/v1/chat/completions", "att-token")
+	headers, err := signedHeaders(sa, "POST", "https://api.u1s1app.com/v1/chat/completions", "att-token")
 	if err != nil {
 		t.Fatalf("signedHeaders() error = %v", err)
 	}
@@ -172,7 +172,7 @@ func TestSignedHeadersIncludeAttestation(t *testing.T) {
 	}
 
 	// An empty attestation token must not produce an empty header.
-	headers, err = signedHeaders(sa, "GET", "https://api.u1s1.io/v1/models", "")
+	headers, err = signedHeaders(sa, "GET", "https://api.u1s1app.com/v1/models", "")
 	if err != nil {
 		t.Fatalf("signedHeaders() error = %v", err)
 	}

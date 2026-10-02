@@ -3,7 +3,7 @@
 [![CI](https://github.com/jizni/u1s1-cpa-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/jizni/u1s1-cpa-plugin/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-一个 CLIProxyAPI（CPA）插件，把 [u1s1](https://u1s1.io) 网关（`https://api.u1s1.io/v1`）接成原生 provider。
+一个 CLIProxyAPI（CPA）插件，把 [u1s1](https://u1s1app.com) 网关（`https://api.u1s1app.com/v1`）接成原生 provider。
 
 - [为什么用插件而不是反向代理](#为什么用插件而不是反向代理)
 - [功能](#功能)
@@ -99,11 +99,11 @@ plugins:
 
 | 键 | 默认值 | 用途 |
 | --- | --- | --- |
-| `base-url` | `https://api.u1s1.io/v1` | 网关基础 URL（鉴权路由挂在 origin 根路径下）。 |
+| `base-url` | `https://api.u1s1app.com/v1` | 网关基础 URL（鉴权路由挂在 origin 根路径下）。 |
 | `client` | `terminal` | `x-u1s1-client` 的值。 |
-| `client-version` | `1.11.6` | `x-u1s1-version` 的值;需与真实 CLI 发布版本保持一致。 |
+| `client-version` | `1.13.1` | `x-u1s1-version` 的值;需与真实 CLI 发布版本保持一致。 |
 | `user-agent` | `pi (linux ...; x64)` | 必须保持 `pi (...)` 指纹。 |
-| `web-origin` | `https://u1s1.io` | 网站 origin：`/api/me`、打卡领取接口所在（与网关 `api.u1s1.io` 不同宿主，用会话 Cookie 鉴权）。 |
+| `web-origin` | `https://u1s1app.com` | 网站 origin：`/api/me`、打卡领取接口所在（与网关 `api.u1s1app.com` 不同宿主，用会话 Cookie 鉴权）。 |
 | `checkin-enabled` | `true` | 是否运行每日打卡调度器。 |
 | `checkin-times` | `08:00,20:00` | 打卡的北京时间时刻，逗号分隔（`HH:MM`）。 |
 
@@ -115,7 +115,7 @@ plugins:
 ```bash
 curl -H "Authorization: Bearer $MGMT_KEY" \
   "http://127.0.0.1:8317/v0/management/u1s1-auth-url"
-# -> {"status":"ok","url":"https://u1s1.io/login?device=...","state":"u1s1-..."}
+# -> {"status":"ok","url":"https://u1s1app.com/login?device=...","state":"u1s1-..."}
 ```
 
 打开 URL，在浏览器里批准设备，然后轮询：

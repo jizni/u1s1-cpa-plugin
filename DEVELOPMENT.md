@@ -1,6 +1,6 @@
 # u1s1 CPA 插件 — 开发文档
 
-CLIProxyAPI (CPA) 插件，把 u1s1 网关（`https://api.u1s1.io/v1`）接成原生 provider。
+CLIProxyAPI (CPA) 插件，把 u1s1 网关（`https://api.u1s1app.com/v1`）接成原生 provider。
 
 - 目标宿主：CPA v7.2.147（Docker，`eceasy/cli-proxy-api:latest`），SDK 版本见 §10
 - 本文件只记**非显而易见的坑**；用户向内容在 README，各文件职责见各文件头注释
@@ -17,7 +17,7 @@ u1s1 不接受普通 Bearer token。每个请求需要**四层**凭证同时成�
 | 1 | 设备令牌 | `authorization: DPoP u1s1d-…` | 设备登录时下发 |
 | 2 | 每请求签名 | `dpop:` JWT，ES256 签 `{jti, htm, htu, iat, ath}`；`ath` = base64url(sha256(deviceToken))；`htu` 去掉 query 和 fragment | 本地 P-256 私钥 |
 | 3 | 完整性令牌 | `x-u1s1-attestation`，TTL 7 天 | `GET /v1/models` 响应的 `client_attestation` 字段 |
-| 4 | 客户端指纹 | `user-agent: pi (...)`、`x-u1s1-client/version/platform`、全套 `x-stainless-*`（官方 CLI 内嵌 OpenAI SDK 指纹） | 固定值 |
+| 4 | 客户端指纹 | `user-agent: pi (...)`、`x-u1s1-client/version/platform`、全套 `x-stainless-*`（官方 CLI 内嵌 OpenAI SDK 指纹，1.13.1 起为 openai 7.19.0） | 固定值 |
 
 关键实现坑：
 
@@ -310,11 +310,12 @@ CLI 的 `usageCtaLines()` 充值/邀请入口是付费客户端自己的提醒�
 （`config.go:defaultClientVersion` + README 配置表）——网关完整性检查会提示"升级并重新
 登录 u1s1"。`TestClientVersionLooksLikeARelease` 钉住形状（三段数字 / SDK x.y.z / node
 vX.Y.Z),让改常量成为有意的编辑。历次跟进(1.4.1 / 1.5.0 / 1.8.1 / 1.9.0 / 1.9.1 / 1.11.0 /
-1.11.2 / 1.11.5 / 1.11.6 逐版对照的全文)在 git 历史,此处只留汇总:
+1.11.2 / 1.11.5 / 1.11.6 / 1.11.7 / 1.11.8 / 1.12.0 / 1.13.0 / 1.13.1 逐版对照的全文)在 git 历史,此处只留汇总:
 
 | 已跟进 | 说明 |
 |---|---|
 | `client-version` → 1.4.1 / 1.5.0 / 1.8.1 / 1.9.0 / 1.9.1 / 1.11.0 / 1.11.2 / 1.11.5 / 1.11.6 | 每次唯一影响可用性的项;其余指纹核实无变化:pi-coding-agent 0.87.1、openai SDK 6.40.0、node v22.23.2。1.9.0 全量 diff 过:改动全在 UI/UX(cwd 提醒、账号显示、web_fetch 分页、免费包文案),`device-auth.js`(签名代理与指纹)与 `api.js` 逐字节相同。1.9.1 全量 diff 过:整棵树只有 3 个文件变化(`package.json` / `.package-lock.json` 的版本号 + `dist/tools.js` 一行 `promptSnippet` 中文改英文),`node_modules` 逐字节相同。1.11.0 全量 diff 过:8 个文件变化(版本号、`usage.js` 免费包文案、`config.js`/`agent-setup.js`/`index.js`/`subagent.js` 的自动压缩与 `/context`、新增 `context-usage.js`),`device-auth.js`/`api.js`/`node_modules`/node 二进制逐字节相同;默认模型 id 由 `deepseek-v4-flash` 改为 `deepseek-flash`(旧 id 网关按别名保留),其 `vision` 转 true(§5)。1.11.2 全量 diff 过:8 个文件变化,全是纯内部重构与文案(`api.js` 把 `/models` 的错误分支挪进 try、超时单独措辞——请求头与响应字段一字未改;`bench.js` 抽 `parseChatCompletion()`;web_fetch 说明去掉 "Cloudflare Browser Rendering" 品牌名改"云端真浏览器"),`device-auth.js`/node 二进制/`node_modules`(除版本号)逐字节相同,端点集合与默认模型 id 未变。1.11.5 全量 diff 过:4 个文件变化,均为 CLI 侧网络/更新行为(`config.d.ts` 加可选 `httpProxy` 类型;`index.js` 启动时经 pi-coding-agent 内部 `core/http-dispatcher.js` 把 `httpProxy` 应用到 undici dispatcher;`update.js`/`.d.ts` 抽出 `buildWindowsUpdateLauncherScript()`,优先 pwsh、回退 Windows PowerShell),`device-auth.js`/`api.js`/`model.js`/`config.js` 与 node 二进制逐字节相同,`node_modules` 仅 `@types/node`(dev 类型)与 `@mariozechner/clipboard` 的 npm 提升布局变化、版本未变,端点集合与默认模型 id 未变 → 插件除版本常量外无需改动。1.11.6 全量 diff 过:dist 侧仅 `import/write.js` 加一行中文注释、新增 `shortcut.js`/`.d.ts`(`u1s1 web shortcut` 桌面快捷方式,纯本地文件操作无网络行为),`device-auth.js`/`api.js`/`model.js`/`config.js`/`index.js` 逐字节相同,端点集合与默认模型 id 未变;`package.json` 依赖 pi-coding-agent/pi-tui 0.84.4 → 0.87.1(连带 pi-agent-core/pi-ai/pi-telemetry 0.87.1、新增 `@earendil-works/chord`、typebox 1.3.7→1.3.27、undici 8.9.0→8.10.2 等传递依赖),但 openai SDK 两版均为 6.40.0、node 二进制仍 v22.23.2、pi-ai 与 pi-coding-agent 的 `pi-user-agent.js`(`pi (linux …; x64)` 形状)逐字节相同、`openai-completions.js` 的头部组装行 `{ "User-Agent": getPiUserAgent(), ...model.headers }` 未变(其余 diff 为 transcript/工具调用内部重构)→ 插件除版本常量外无需改动 |
+| 1.11.7 → 1.13.1:主域迁移 + SDK 升级 | 1.13.1 是本插件首个需要改**两处**常量的版本。① **主域** `u1s1.io` → `u1s1app.com`(`site.js` 的 `CN_ORIGIN`;页面 308 跳新域,`api.u1s1.io` 仍原地服务;`migrateStoredBaseUrl` 把旧 base 改写成 `https://api.u1s1app.com/v1`),插件 `defaultBaseURL`/`defaultWebOrigin` 及面板链接、打卡提示文案随之更新。② **openai SDK** 6.40.0 → 7.19.0——pi-coding-agent 0.87.1 → 1.0.0,pi-ai 仍 1.0.0,但嵌套 `openai/version.js` 由 6.40.0 变 7.19.0,`x-stainless-package-version` 必须跟着改(`stainlessPackageVersion`);node 二进制仍 v22.23.2、`x-stainless-runtime-version` 不变。核对过 6.40.0 与 7.19.0 的 `client.mjs`/`detect-platform.js`:头部形状一致(`X-Stainless-Retry-Count` 恒 "0"、`X-Stainless-Timeout` 仅在显式设 timeout 时出现,CLI 未设),唯一差异是 package-version 常量。`device-auth.js` 的最终跳头注入三行(`x-u1s1-client/version/platform`)逐字节相同,改动仅 i18n(错误文案包 `tr()`、新增 `i18n.js`/`site.js`),`api.js` 同样仅 i18n。默认模型仍 `deepseek-flash`。另:CLI 新增国际站 `u1s1.dev`(`INTL_ORIGIN`)——插件只跟中国站,不跟。 |
 | 错误文本 `(HTTP 429 · code · 请求编号 …)` + `insufficient_quota` 归一 | `errorTail()` |
 | `free_package_eligible` 纳入模型说明 | §5 |
 | 面板向 `u1s1 usage` 新口径对齐（Token 为主、`login_checkin_bonus` 标签、`free_claim` 角标） | §6 |
@@ -334,8 +335,9 @@ vX.Y.Z),让改常量成为有意的编辑。历次跟进(1.4.1 / 1.5.0 / 1.8.1 /
 
 ## 9. 每日打卡（2026-09-04）
 
-端点 `POST https://u1s1.io/api/packages/login-checkin/claim`（注意是 **u1s1.io** 不是
-api.u1s1.io）用浏览器会话 Cookie 鉴权，设备 DPoP 凭证不通用（返回 401）。卡过的两个
+端点 `POST https://u1s1app.com/api/packages/login-checkin/claim`（注意是 **u1s1app.com**
+不是 api.u1s1app.com；u1s1.io 为旧主域，页面 308 跳到新域）用浏览器会话 Cookie 鉴权，
+设备 DPoP 凭证不通用（返回 401）。卡过的两个
 误判：
 
 - **验证码无法绕过** —— 实际是 fail-open：仪表盘在 capcat / Turnstile 失败时照样提交

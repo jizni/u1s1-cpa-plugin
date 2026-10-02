@@ -40,7 +40,7 @@ func TestStartDeviceLoginPreservesSlowPollInterval(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			body, _ = json.Marshal(map[string]any{
-				"verify_url":  "https://u1s1.io/login?device=abc",
+				"verify_url":  "https://u1s1app.com/login?device=abc",
 				"poll_secret": "ps-1",
 				"interval":    tc.interval,
 				"expires_in":  900,

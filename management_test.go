@@ -18,7 +18,7 @@ import (
 // the host tearing down the request context (context canceled) is momentary;
 // a 502 or nil must not be retried.
 func TestIsTransientCancel(t *testing.T) {
-	if !isTransientCancel(errors.New(`host.http.do: host error host_call_failed: execute host http request: Get "https://api.u1s1.io/v1/me": context canceled`)) {
+	if !isTransientCancel(errors.New(`host.http.do: host error host_call_failed: execute host http request: Get "https://api.u1s1app.com/v1/me": context canceled`)) {
 		t.Fatal("context canceled must count as transient")
 	}
 	if isTransientCancel(errors.New("u1s1 me: 502 Bad Gateway")) {

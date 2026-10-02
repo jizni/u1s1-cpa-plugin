@@ -1,6 +1,6 @@
 // checkin.go implements the daily login check-in (每日登录打卡).
 //
-// The claim endpoint lives on the *website* (u1s1.io), not the gateway:
+// The claim endpoint lives on the *website* (u1s1app.com), not the gateway:
 //
 //	POST /api/packages/login-checkin/claim
 //	{"cap-token": ..., "cf-turnstile-response": ...}
@@ -75,7 +75,7 @@ type checkinRunState struct {
 // Callers route it with errors.Is: the status route flips needs_login so the
 // panel's attention badge fires, and the scheduler records status auth_expired
 // (the panel renders that as 会话已失效) instead of the generic error.
-var errCheckinSessionExpired = errors.New("网页会话已失效，请重新登录 u1s1.io 并更新 Cookie")
+var errCheckinSessionExpired = errors.New("网页会话已失效，请重新登录 u1s1app.com 并更新 Cookie")
 
 // webLoginCheckin mirrors the login_checkin object on the website /api/me.
 type webLoginCheckin struct {
@@ -332,7 +332,7 @@ func claimLoginCheckin(origin, cookie, callbackID string) (*claimResponse, error
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("网页会话已失效，请重新登录 u1s1.io 并更新 Cookie")
+		return nil, fmt.Errorf("网页会话已失效，请重新登录 u1s1app.com 并更新 Cookie")
 	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("u1s1 web claim: %s", gatewayMessage(resp.Body, resp.StatusCode))
@@ -356,7 +356,7 @@ func runCheckinFor(origin, email, credPath, callbackID string) *checkinRunState 
 	}
 	cookie := normalizeCookie(sc.Cookie)
 	if cookie == "" {
-		return &checkinRunState{At: nowRFC3339(), Status: "no_cookie", Message: "未设置网页 Cookie，请登录 u1s1.io 后更新"}
+		return &checkinRunState{At: nowRFC3339(), Status: "no_cookie", Message: "未设置网页 Cookie，请登录 u1s1app.com 后更新"}
 	}
 	if email == "" {
 		email = "account"

@@ -1,6 +1,6 @@
 // u1s1 provider plugin for CLIProxyAPI.
 //
-// Proxies the u1s1 gateway (https://api.u1s1.io/v1) through CPA:
+// Proxies the u1s1 gateway (https://api.u1s1app.com/v1) through CPA:
 //   - auth_provider: browser device login (ECDSA P-256 keypair + /auth/device/start|poll),
 //     credentials persisted as u1s1-<email>.json in the host auth-dir.
 //   - model_provider: dynamic model discovery via GET /v1/models.

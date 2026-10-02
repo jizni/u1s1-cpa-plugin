@@ -11,19 +11,24 @@ import (
 
 const (
 	providerName   = "u1s1"
-	defaultBaseURL = "https://api.u1s1.io/v1"
+	defaultBaseURL = "https://api.u1s1app.com/v1"
 	defaultClient  = "terminal"
 	// defaultWebOrigin is the website that hosts the dashboard API (/api/me,
 	// /api/packages/login-checkin/claim). It is a different host from the
-	// gateway (api.u1s1.io) and authenticates with browser session cookies.
-	defaultWebOrigin = "https://u1s1.io"
+	// gateway (api.u1s1app.com) and authenticates with browser session cookies.
+	// u1s1.io is the legacy primary domain: its pages 308-redirect here, while
+	// the old API host still serves in place (u1s1-cli site.js migrateStoredBaseUrl
+	// rewrites stored legacy bases to the new one).
+	defaultWebOrigin = "https://u1s1app.com"
 	// Client version reported to the gateway; matches the installed u1s1 CLI
-	// (u1s1-cli 1.11.6). The gateway's integrity check tells users to "升级并重新
+	// (u1s1-cli 1.13.1). The gateway's integrity check tells users to "升级并重新
 	// 登录 u1s1", so this must track real CLI releases.
-	defaultClientVersion = "1.11.6"
+	defaultClientVersion = "1.13.1"
 	defaultUserAgent     = "pi (linux 6.12.86+deb13-cloud-amd64; x64)"
-	// OpenAI SDK fingerprint echoed by the pi coding agent.
-	stainlessPackageVersion = "6.40.0"
+	// OpenAI SDK fingerprint echoed by the pi coding agent. u1s1-cli 1.13.1
+	// moved to @earendil-works/pi-coding-agent 1.0.0, which bundles openai 7.19.0
+	// (was 6.40.0); the bundled node runtime is still v22.23.2.
+	stainlessPackageVersion = "7.19.0"
 	stainlessRuntimeVersion = "v22.23.2"
 )
 
@@ -34,7 +39,7 @@ type pluginConfig struct {
 	ClientVersion string `yaml:"client-version"`
 	UserAgent     string `yaml:"user-agent"`
 	// WebOrigin is the website origin whose /api/* routes host the dashboard
-	// (login check-in claim). Defaults to https://u1s1.io.
+	// (login check-in claim). Defaults to https://u1s1app.com.
 	WebOrigin string `yaml:"web-origin"`
 	// CheckinEnabled turns the daily login check-in scheduler on/off.
 	CheckinEnabled *bool `yaml:"checkin-enabled"`
@@ -127,7 +132,7 @@ func activeConfig() pluginConfig {
 }
 
 // webOrigin returns the website origin (for dashboard API routes), defaulting
-// to https://u1s1.io when the config leaves it empty.
+// to https://u1s1app.com when the config leaves it empty.
 func (c pluginConfig) webOrigin() string {
 	if strings.TrimSpace(c.WebOrigin) != "" {
 		return strings.TrimSuffix(strings.TrimSpace(c.WebOrigin), "/")
@@ -153,11 +158,11 @@ func registrationResponse() registration {
 			Author:           "jizni",
 			GitHubRepository: "https://github.com/jizni/u1s1-cpa-plugin",
 			ConfigFields: []pluginapi.ConfigField{
-				{Name: "base-url", Type: pluginapi.ConfigFieldTypeString, Description: "u1s1 gateway base URL including /v1 (default https://api.u1s1.io/v1)."},
+				{Name: "base-url", Type: pluginapi.ConfigFieldTypeString, Description: "u1s1 gateway base URL including /v1 (default https://api.u1s1app.com/v1)."},
 				{Name: "client", Type: pluginapi.ConfigFieldTypeString, Description: "Value of the x-u1s1-client header (default terminal)."},
-				{Name: "client-version", Type: pluginapi.ConfigFieldTypeString, Description: "Value of the x-u1s1-version header (default 1.11.6)."},
+				{Name: "client-version", Type: pluginapi.ConfigFieldTypeString, Description: "Value of the x-u1s1-version header (default 1.13.1)."},
 				{Name: "user-agent", Type: pluginapi.ConfigFieldTypeString, Description: "User-Agent sent upstream; the gateway checks the pi client fingerprint."},
-				{Name: "web-origin", Type: pluginapi.ConfigFieldTypeString, Description: "Website origin hosting the dashboard API (default https://u1s1.io)."},
+				{Name: "web-origin", Type: pluginapi.ConfigFieldTypeString, Description: "Website origin hosting the dashboard API (default https://u1s1app.com)."},
 				{Name: "checkin-enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Run the daily login check-in scheduler (default true)."},
 				{Name: "checkin-times", Type: pluginapi.ConfigFieldTypeString, Description: "Beijing-time HH:MM slots for the check-in, comma-separated (default 08:00,20:00)."},
 			},
