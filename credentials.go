@@ -114,10 +114,35 @@ func (s storedAuth) hasDeviceCredential() bool {
 }
 
 func (s storedAuth) baseURL() string {
-	if strings.TrimSpace(s.BaseURL) != "" {
-		return strings.TrimSuffix(strings.TrimSpace(s.BaseURL), "/")
+	if v := strings.TrimSpace(s.BaseURL); v != "" {
+		return migrateStoredBaseURL(v)
 	}
 	return activeConfig().BaseURL
+}
+
+// legacyCNBases are the historic China-site API roots. u1s1-cli's site.js
+// (migrateStoredBaseUrl) rewrites a stored base that matches one of these to
+// the current SITES.cn.apiBase; older CLI installs and credential files copied
+// from ~/.u1s1/config.json still carry api.u1s1.io. The site moved to
+// u1s1app.com (u1s1.io pages 308-redirect, but signed POSTs must not be sent to
+// a host the CLI has left behind), so a stored legacy base must be migrated
+// rather than trusted verbatim.
+var legacyCNBases = map[string]bool{
+	"https://api.u1s1.io/v1": true,
+}
+
+// migrateStoredBaseURL rewrites a legacy China-site API root to the plugin's
+// configured base URL. International-site (u1s1.dev), the current China-site
+// base, and custom gateway URLs are returned unchanged: they are different
+// accounts/endpoints, and the plugin must not redirect them to the China site.
+// Trailing slashes are trimmed before comparison, matching the CLI's
+// normalization.
+func migrateStoredBaseURL(stored string) string {
+	normalized := strings.TrimSuffix(strings.TrimSpace(stored), "/")
+	if legacyCNBases[normalized] {
+		return activeConfig().BaseURL
+	}
+	return normalized
 }
 
 func parseStored(raw []byte) (storedAuth, error) {

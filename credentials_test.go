@@ -64,3 +64,47 @@ func TestStoredAuthPreservesUnknownKeys(t *testing.T) {
 		t.Fatalf("deviceToken = %v", final["deviceToken"])
 	}
 }
+
+// Credential files written by older CLI installs still carry the legacy China
+// site API root. The plugin must migrate it to the configured base URL (matching
+// u1s1-cli site.js migrateStoredBaseUrl) instead of sending signed requests to a
+// host the CLI has left behind.
+func TestBaseURLMigratesLegacyChinaSite(t *testing.T) {
+	sa := testStoredAuth(t)
+	sa.BaseURL = "https://api.u1s1.io/v1"
+	if got := sa.baseURL(); got != defaultBaseURL {
+		t.Fatalf("baseURL() = %q, want migrated %q", got, defaultBaseURL)
+	}
+
+	// Trailing-slash variants normalize before the legacy comparison.
+	sa.BaseURL = "https://api.u1s1.io/v1/"
+	if got := sa.baseURL(); got != defaultBaseURL {
+		t.Fatalf("baseURL() with trailing slash = %q, want %q", got, defaultBaseURL)
+	}
+}
+
+// The current China-site base and the international site are different
+// accounts/endpoints; migration must leave them untouched.
+func TestBaseURLKeepsNonLegacyHosts(t *testing.T) {
+	cases := []string{
+		defaultBaseURL,
+		"https://api.u1s1.dev/v1",
+		"https://gateway.example.com/v1",
+	}
+	for _, base := range cases {
+		sa := testStoredAuth(t)
+		sa.BaseURL = base
+		if got := sa.baseURL(); got != base {
+			t.Fatalf("baseURL(%q) = %q, want unchanged", base, got)
+		}
+	}
+}
+
+// An empty credential base falls back to the configured (new) default.
+func TestBaseURLFallsBackToConfig(t *testing.T) {
+	sa := testStoredAuth(t)
+	sa.BaseURL = ""
+	if got := sa.baseURL(); got != defaultBaseURL {
+		t.Fatalf("baseURL() = %q, want %q", got, defaultBaseURL)
+	}
+}
