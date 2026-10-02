@@ -109,6 +109,24 @@ provider 的文件。公私钥不配对的在解析期就被拒（`parsePrivateJ
 `u1s1-<email>.json`，把手工改名或直接拷进来的 `config.json` 改名/复制成第二份凭证
 （后果：模型重复注册、面板出现两行同一账号）。
 
+### base URL 迁移：读时改写 + 落盘回写
+
+凭证里的 `baseUrl` 优先于插件配置（`storedAuth.baseURL()`：非空则用它，空才回退
+`activeConfig().BaseURL`）。这原本是个陷阱：旧 CLI 安装、以及从 `~/.u1s1/config.json`
+导入的凭证存的是旧主域 `https://api.u1s1.io/v1`，主域迁到 `u1s1app.com` 后签名请求
+仍打旧域名。实测表现为容器内 chat **挂起 2 分钟至客户端 499**，而 `/v1/me` 这类瞬时
+请求照常返回，掩盖了问题（旧域名的 API 只 308 页面、API 仍原地服务，不是硬报错）。
+
+对齐 u1s1-cli `site.js` 的 `migrateStoredBaseUrl`：
+
+- **读时**：`baseURL()` 把历代中国站旧根（`api.u1s1.io/v1`）改写成配置值。
+- **写时**：`authDataFor()` 调 `withMigratedBaseURL()`，所以 `auth.parse` / 登录 poll /
+  `auth.refresh` 三条回写路径落盘的都是新域名——只改读路径的话，auth-dir 里的文件会
+  永远停在旧域名，每个宿主进程首次加载都走一次旁路。
+- **不迁移**：国际站 `api.u1s1.dev/v1`、当前值、自定义网关一律不动（不同账号/端点，
+  不能假定账号相通）；比较前归一化尾部斜杠。
+- 不建模的 `Extra` 键、凭据本体与 metadata 全集不变（见上两节）。
+
 ### 写盘契约：metadata 必须是凭证的全集
 
 `AuthData.Metadata` 不是展示字段，而是**写盘的权威来源**。宿主落盘前先把同名旧文件的
@@ -212,11 +230,17 @@ id，旧 `deepseek-v4-flash` 仍由网关按别名下发并标注 legacy），�
 
 ## 6. 管理面板
 
-入口 `/v0/resource/plugins/u1s1/panel`（管理台侧边栏「u1s1」）。内容：今日免费额度
-（进度条）、余额（按量）、本月已用、包内剩余 Token、额度重置时间，以及**合并后的用量包
-表格**（中文名、剩余/额度进度条、今日已用、适用范围、到期时间）。数字格式与
-`u1s1 usage` 的 万/亿 表达一致；金额卡片 Token 为主、美元为副（按 `/v1/me` 下发的
-`tokens_per_usd` 折算，老网关无此字段时退纯美元显示）。
+入口 `/v0/resource/plugins/u1s1/panel`（管理台侧边栏「u1s1」）。内容：总剩余 Token、
+余额（按量）、本月已用，以及**合并后的用量包表格**（中文名、剩余/额度进度条、今日已用、
+适用范围、到期时间）。数字格式与 `u1s1 usage` 的 万/亿 表达一致；金额卡片 Token 为主、
+美元为副（按 `/v1/me` 下发的 `tokens_per_usd` 折算，老网关无此字段时退纯美元显示）。
+
+**为什么不再有「今日免费剩余」**：网关已下线每日免费包口径，`/v1/me` 的 `daily_free_usd`
+/ `daily_free_used_usd` / `daily_free_remaining_usd` 恒为 0，`daily_free_resets_at` 与
+`daily_free_model` 仅作为遗留字段保留。旧面板的「今日免费剩余」卡（恒 $0）与「额度重置」
+卡（依赖 `daily_free_resets_at`）因此失去意义，换成「总剩余 Token」（`total_remaining_tokens`，
+即各包 `remaining` 汇总），并删除与之重复的旧「包内剩余 Token」卡；`daily_free_*`
+字段仍留在 JSON 里不再渲染。
 
 **余额口径对齐官网 dashboard**：CLI 1.8.1 起不再把网关 `remaining_usd` 当"永久余额"
 （那是全部包剩余 Token 的美元折算，与用量包列表重复计数）；面板"余额(按量)"取

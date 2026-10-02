@@ -360,7 +360,7 @@ function showMsg(text, kind, action) {
 const VIEWS = {
   usage: {
     tab: "tab-usage", title: "u1s1 额度", refresh: "刷新额度",
-    sub: '今日免费额度 · 余额(按量) · 用量包明细（与 <code>u1s1 usage</code> 一致）',
+    sub: '总剩余 Token · 余额(按量) · 用量包明细（与 <code>u1s1 usage</code> 一致）',
     load: loadUsage,
   },
   checkin: {
@@ -500,8 +500,6 @@ function renderAccount(a) {
     </tr>` + grantNote;
   }).join("");
 
-  const freePct = a.daily_free_usd > 0 ? a.daily_free_remaining_usd / a.daily_free_usd * 100 : 0;
-  const free = moneyCell(a, a.daily_free_remaining_usd);
   const balance = moneyCell(a, a.bonus_balance_usd);
   const monthly = moneyCell(a, a.mtd_usd);
   // A claimable free package is only claimable on the website: the claim endpoint
@@ -518,17 +516,12 @@ function renderAccount(a) {
       <span class="mut">${esc(a.name)}</span>
     </div>
     <div class="grid">
-      <div class="kv"><div class="k">今日免费剩余</div><div class="v">${free.value}</div>
-        ${meter(a.daily_free_remaining_usd, a.daily_free_usd)}
-        <div class="note">共 ${usd(a.daily_free_usd)} · ${freePct.toFixed(1)}%</div></div>
+      <div class="kv"><div class="k">总剩余 Token</div><div class="v">${tokens(a.total_remaining_tokens)}</div>
+        <div class="note">今日已用 ${tokens(a.total_used_today)}</div></div>
       <div class="kv"><div class="k">余额(按量)</div><div class="v">${balance.value}</div>
         <div class="note">${[balance.note, a.bonus_balance_usd ? `含赠送 ${usd(a.bonus_balance_usd)}` : ""].filter(Boolean).join(" · ")}</div></div>
       <div class="kv"><div class="k">本月已用</div><div class="v">${monthly.value}</div>
         ${monthly.note ? `<div class="note">${monthly.note}</div>` : ""}</div>
-      <div class="kv"><div class="k">包内剩余 Token</div><div class="v">${tokens(a.total_remaining_tokens)}</div>
-        <div class="note">今日已用 ${tokens(a.total_used_today)}</div></div>
-      <div class="kv"><div class="k">额度重置</div><div class="v sm">${localTime(a.daily_free_resets_at)}</div>
-        <div class="note">计价模型 ${esc(a.daily_free_model || "—")}</div></div>
     </div>
     ${rows ? `<table><thead><tr>
         <th>用量包</th><th class="num">剩余</th><th class="num">额度</th>

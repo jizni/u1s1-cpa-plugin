@@ -120,6 +120,20 @@ func (s storedAuth) baseURL() string {
 	return activeConfig().BaseURL
 }
 
+// withMigratedBaseURL returns a copy whose BaseURL is normalized to the current
+// site, so every write-back path (auth.parse, login poll, auth.refresh) persists
+// the new domain instead of echoing a legacy value from an older CLI install.
+// Mirrors u1s1-cli's migrateStoredBaseUrl, which rewrites the stored base on the
+// next save. A credential with no stored base is left untouched: the host keeps
+// its existing value and baseURL() falls back to the configured default.
+func (s storedAuth) withMigratedBaseURL() storedAuth {
+	if strings.TrimSpace(s.BaseURL) == "" {
+		return s
+	}
+	s.BaseURL = migrateStoredBaseURL(s.BaseURL)
+	return s
+}
+
 // legacyCNBases are the historic China-site API roots. u1s1-cli's site.js
 // (migrateStoredBaseUrl) rewrites a stored base that matches one of these to
 // the current SITES.cn.apiBase; older CLI installs and credential files copied

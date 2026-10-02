@@ -244,6 +244,11 @@ func credentialMetadata(sa storedAuth) (map[string]any, error) {
 // authDataFor builds the host AuthData record (file name, label, attributes)
 // from a credential. The file lands in auth-dir as u1s1-<email>.json.
 func authDataFor(sa storedAuth) (pluginapi.AuthData, error) {
+	// Persist the current site's API root: credentials imported from an older
+	// CLI install still carry the legacy base, and the host echoes StorageJSON
+	// back to disk on every parse/refresh. Normalizing here is what actually
+	// migrates the auth-dir file, not just the in-memory request path.
+	sa = sa.withMigratedBaseURL()
 	storage, err := json.Marshal(sa)
 	if err != nil {
 		return pluginapi.AuthData{}, err

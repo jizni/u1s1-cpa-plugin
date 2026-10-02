@@ -59,6 +59,55 @@ func TestAuthDataPublishesEveryCredentialKeyInMetadata(t *testing.T) {
 	}
 }
 
+// authDataFor is the single write-back path for auth.parse, the login poll and
+// auth.refresh. A credential carrying the legacy China-site API root must be
+// re-encoded with the current base so the host persists the migration to disk;
+// leaving the old value would keep every refresh pointing at a retired host.
+func TestAuthDataPersistsMigratedBaseURL(t *testing.T) {
+	sa := testStoredAuth(t)
+	sa.BaseURL = "https://api.u1s1.io/v1"
+
+	data, err := authDataFor(sa)
+	if err != nil {
+		t.Fatalf("authDataFor() error = %v", err)
+	}
+	var storage struct {
+		BaseURL string `json:"baseUrl"`
+	}
+	if err := json.Unmarshal(data.StorageJSON, &storage); err != nil {
+		t.Fatalf("unmarshal storage: %v", err)
+	}
+	if storage.BaseURL != defaultBaseURL {
+		t.Fatalf("persisted baseUrl = %q, want migrated %q", storage.BaseURL, defaultBaseURL)
+	}
+	// Metadata is what the host applies over the existing record; it must carry
+	// the same migrated value or the on-disk file keeps the legacy base.
+	if got := data.Metadata["baseUrl"]; got != defaultBaseURL {
+		t.Fatalf("metadata baseUrl = %v, want %q", got, defaultBaseURL)
+	}
+}
+
+// A non-China base (international site, custom gateway) must survive the write
+// path untouched: migration must not drag it onto the China site.
+func TestAuthDataKeepsNonLegacyBaseURL(t *testing.T) {
+	sa := testStoredAuth(t)
+	sa.BaseURL = "https://api.u1s1.dev/v1"
+
+	data, err := authDataFor(sa)
+	if err != nil {
+		t.Fatalf("authDataFor() error = %v", err)
+	}
+	var storage struct {
+		BaseURL string `json:"baseUrl"`
+	}
+	if err := json.Unmarshal(data.StorageJSON, &storage); err != nil {
+		t.Fatalf("unmarshal storage: %v", err)
+	}
+	if storage.BaseURL != "https://api.u1s1.dev/v1" {
+		t.Fatalf("persisted baseUrl = %q, want unchanged", storage.BaseURL)
+	}
+}
+
 // An empty attestation must be published as an explicit empty value, not left
 // absent: absent keys are the ones the host backfills, and inheriting a token
 // issued for a previous device registration produces 403s that look random.
