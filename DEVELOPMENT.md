@@ -2,7 +2,7 @@
 
 CLIProxyAPI (CPA) 插件，把 u1s1 网关（`https://api.u1s1app.com/v1`）接成原生 provider。
 
-- 目标宿主：CPA v7.2.147（Docker，`eceasy/cli-proxy-api:latest`），SDK 版本见 §10
+- 目标宿主：CPA v8.0.13（Docker，`eceasy/cli-proxy-api:latest`），SDK 版本见 §10
 - 本文件只记**非显而易见的坑**；用户向内容在 README，各文件职责见各文件头注释
 
 ---
@@ -76,7 +76,7 @@ wire 层（按网关端点一文件：`gateway_models.go` / `gateway_me.go` / `g
 - **替换需重启容器**：宿主只在插件**文件路径变化**时重建插件，覆盖同名 `u1s1.so` +
   touch config.yaml 不会重载（宿主仍持旧库 inode）。替换后必须
   `docker restart cli-proxy-api`，重启后核对日志确认新版本已注册、模型重新注册。
-- **热替换（未实测）**：宿主 v7.2.147 支持不重启换文件名 `u1s1-v<版本>.so`。两个坑：
+- **热替换（未实测）**：宿主 v8.0.13 支持不重启换文件名 `u1s1-v<版本>.so`。两个坑：
   旧文件会被删（进程首次 `ApplyConfig` 把同 id 未选中的 `.so` 直接 `os.Remove`，目录里
   一旦有了 `u1s1-v*.so`，下次重启会删掉无版本号的 `u1s1.so`）；旧库不会被卸载
   （`dlclose` 只在 `UnloadPlugin` / `ShutdownAll` 做，热替换后旧库仍映射在进程里）。
@@ -404,16 +404,37 @@ v0.2.6 静态审查九项修复（全部有回归测试）：**sidecar 并发（
 ## 10. 依赖
 
 ```
-github.com/router-for-me/CLIProxyAPI/v7 v7.2.147  # pluginapi / pluginabi 类型定义
+github.com/router-for-me/CLIProxyAPI/v8 v8.0.13  # pluginapi / pluginabi 类型定义
 gopkg.in/yaml.v3 v3.0.1                            # 解析 plugins.configs.u1s1
 ```
 
-SDK 版本与运行时宿主（v7.2.147）对齐。插件与宿主走稳定 C ABI + JSON envelope，SDK 只
+SDK 版本与运行时宿主（v8.0.13）对齐。插件与宿主走稳定 C ABI + JSON envelope，SDK 只
 提供结构体定义，版本偏离本身不破兼容（ABIVersion 仍 1）；对齐的目的是能读到宿主当前的
 契约声明（新方法名、能力位、SchemaVersion）。
 
-插件回 `schema_version: 1`，而宿主已声明到 4——有意保留：2/3/4 分别引入请求生命周期
-回调、流式 chunk 不再携带 request body、WebSocket 响应观察，三项都不声明，升版只会把
+### v7.2.147 → v8.0.13 迁移评估（2026-10-04）
+
+上游 v8.0.x 是 v7 的大版本，但插件面零破坏：`sdk/pluginabi` 与 `sdk/pluginapi` 全量 diff
+确认均为**纯增量**——
+
+- `pluginabi`：新增 quota.*、host.http.operation_open/cancel、host.affinity.lookup、
+  host.routing.reset_cooldown 方法常量；`Error` 补 `Error()`/`StatusCode()` 方法与
+  `NewError`/`NewErrorEnvelope` 构造函数（字段未动，插件自己的 envelope 在 bridge.go）；
+  新增 SchemaVersion 5/6 常量。
+- `pluginapi`：`HTTPPluginRegistration` 加 `SchedulerAcrossPriorities`、`QuotaProvider`
+  可选接口；既有结构体（`ModelExecutionContext`、`AuthInfo`、`UsageRecord`、`HTTPRequest`
+  等）只加**尾部可选字段**，无删除、无签名变化。
+
+迁移实际改动只有 go.mod 的模块路径 `/v7` → `/v8` 与版本号（import sed 批量替换），测试/
+vet/race/构建全绿。插件注册仍回 `schema_version: 1`（见下），不领用任何新 schema 行为。
+
+另：迁移前线上宿主（v8.0.13）就跑着 v7 构建的 v0.3.13，模型注册/聊天/面板均正常——
+C ABI + JSON envelope 本就跨大版本兼容（各结构体新字段都带 `omitempty`，宿主按
+extension 协商），v8 迁移是“对齐契约声明”而非“修复不兼容”。
+
+插件回 `schema_version: 1`，而宿主已声明到 6——有意保留：2/3/4 分别引入请求生命周期
+回调、流式 chunk 不再携带 request body、WebSocket 响应观察，5 起 payload chunk 不再带
+HistoryChunks、6 起管理接口 JSON 不做 HTML 实体转义，三项都不声明，升版只会把
 契约变严而不多任何收益；`resp.SchemaVersion > pluginabi.SchemaVersion` 才是宿主拒载的
 条件，声明低版本安全。
 
