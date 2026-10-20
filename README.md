@@ -87,8 +87,20 @@ glibc 兼容性（≤ 2.36）、跑单测，然后把 `u1s1.so` 和 `u1s1.so.sha
 
 ```bash
 cp dist/u1s1.so <cpa>/plugins/linux/amd64/u1s1.so
-docker restart cli-proxy-api   # 插件替换后必须重启容器才能生效，见 DEVELOPMENT.md §3
+docker restart cli-proxy-api   # 老惯例：覆盖同名文件后必须重启，见 DEVELOPMENT.md §3
 ```
+
+**热更新（不重启，v8.0.23 实测）**：把产物以带版本号的文件名落盘，再原地改一行
+`config.yaml` 内容触发 watcher 即可——
+
+```bash
+cp dist/u1s1.so <cpa>/plugins/linux/amd64/u1s1-v1.14.1.so
+printf '\n# reload\n' >> <cpa>/config.yaml   # 必须改内容：touch 无效(sha256 跳过)、sed -i 无效(换 inode)
+```
+
+在 `logs/main.log` 里看到 `pluginhost: plugin hot reloaded ... active_version=1.14.1` 即成功。
+注意：目录里存在 `u1s1-v*.so` 后，无版本号的 `u1s1.so` 将永远竞争不过它——后续更新请继续用
+带版本号的文件名（或先删旧的），否则会静默用旧版。详见 DEVELOPMENT.md §3。
 
 ```yaml
 plugins:

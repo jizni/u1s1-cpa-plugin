@@ -73,14 +73,31 @@ wire 层（按网关端点一文件：`gateway_models.go` / `gateway_me.go` / `g
   窗口），容器内构建保证符号需求不超 2.36。构建加 `-buildvcs=false`：容器 job 里
   checkout 的仓库所有者与容器用户不一致，go 的 VCS 打戳会报 `error obtaining VCS
   status`（版本号本来就由 ldflags 注入，VCS 信息没用）。
-- **替换需重启容器**：宿主只在插件**文件路径变化**时重建插件，覆盖同名 `u1s1.so` +
-  touch config.yaml 不会重载（宿主仍持旧库 inode）。替换后必须
-  `docker restart cli-proxy-api`，重启后核对日志确认新版本已注册、模型重新注册。
-- **热替换（未实测）**：宿主 v8.0.13 支持不重启换文件名 `u1s1-v<版本>.so`。两个坑：
-  旧文件会被删（进程首次 `ApplyConfig` 把同 id 未选中的 `.so` 直接 `os.Remove`，目录里
-  一旦有了 `u1s1-v*.so`，下次重启会删掉无版本号的 `u1s1.so`）；旧库不会被卸载
-  （`dlclose` 只在 `UnloadPlugin` / `ShutdownAll` 做，热替换后旧库仍映射在进程里）。
-  当前部署仍是无版本号文件名 + 重启。
+- **热替换（v8.0.23 实测通过，2026-10-20，无需重启）**：两步——① 新产物以
+  `u1s1-v<版本>.so` 落盘（宿主 `selectPluginFiles` 按文件名取版本，**带版本号的永远胜过
+  无版本号的**，不与真实版本号比较大小）；② **必须改 config.yaml 的内容**触发
+  watcher：`reloadConfigIfChanged` 先比全文 sha256，内容不变直接跳过，所以 **touch 改
+  mtime 无效**；也不能用 `sed -i` 这类「写临时文件 + rename」的原子替换——fsnotify 盯的是
+  旧 inode，换 inode 后事件永久消失，要**原地追加**（`printf '\n# ...' >> config.yaml`）。
+  随后链路：watcher → `reloadConfigIfChanged` → `reloadConfig` → `reloadClients` →
+  reloadCallback → `applyConfigRuntime` → `pluginHost.ApplyConfig` 重扫目录，路径变化即热切换。
+  日志特征（在 `logs/main.log`；stdout 会被日志级别过滤，`docker logs` 里可能看不到）：
+  `pluginhost: plugin loaded ... version=1.14.1 path=.../u1s1-v1.14.1.so` → `plugin registered`
+  → `plugin hot reloaded ... active_version=1.14.1 retired_version=0.3.14`；`/proc/<pid>/maps`
+  能看到两个 `.so` 同时在映射。实测完补一次 `/v1/models` + 1-token 聊天验证链路。
+- **热替换的三个坑（实测补充）**：① 旧库不会卸载（`dlclose` 只在 `UnloadPlugin`/
+  `ShutdownAll` 做），旧实例的 goroutine（如打卡调度器）继续活到下次重启；服务端按天去重，
+  重复打卡是无害 no-op。② 旧的无版本文件**不会**在热替换时被删——`cleanupUnselectedPluginFiles`
+  只在启动后首次 `ApplyConfig` 消费 `cleanupFilesPending`，所以下次重启才清（可手工删，`.bak`
+  已在）。③ **惯例警告**：目录里一旦存在 `u1s1-v*.so`，之后再把新构建拷成无版本号
+  `u1s1.so` **不会**被选中（无版本号永远竞争不过带版本号的），更新要么继续用带版本号文件名，
+  要么先删旧的带版本号文件——否则会 silently 用旧版。
+- **替换需重启的场景**：只想沿用「无版本号 `u1s1.so` + 重启」的老惯例时，覆盖同名文件 +
+  `docker restart cli-proxy-api` 依然有效（宿主持旧 inode，不重启不重载）。
+- **管理面入口（需要管理密钥，watcher 路线不需要）**：`POST /v8/management/plugins/store/:id/install`
+  是官方安装口（落盘即成 `u1s1-v<版本>.so`，Linux 不挡已加载插件的覆盖，仅 Windows 挡）；
+  `POST /v0/management/server-reload` 也存在。探测管理端点会触发 IP 禁令（约 30 分钟），
+  没有密钥时走 watcher 路线即可。
 
 ---
 
