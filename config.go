@@ -21,13 +21,15 @@ const (
 	// rewrites stored legacy bases to the new one).
 	defaultWebOrigin = "https://u1s1app.com"
 	// Client version reported to the gateway; matches the installed u1s1 CLI
-	// (u1s1-cli 1.13.2). The gateway's integrity check tells users to "升级并重新
+	// (u1s1-cli 1.14.1). The gateway's integrity check tells users to "升级并重新
 	// 登录 u1s1", so this must track real CLI releases.
-	defaultClientVersion = "1.13.2"
+	defaultClientVersion = "1.14.1"
 	defaultUserAgent     = "pi (linux 6.12.86+deb13-cloud-amd64; x64)"
 	// OpenAI SDK fingerprint echoed by the pi coding agent. u1s1-cli 1.13.1
 	// moved to @earendil-works/pi-coding-agent 1.0.0, which bundles openai 7.19.0
-	// (was 6.40.0); the bundled node runtime is still v22.23.2.
+	// (was 6.40.0); 1.14.1 rides pi-coding-agent 1.2.0 (pi-ai/pi-agent-core/
+	// pi-telemetry along for the ride) and still bundles openai 7.19.0, and the
+	// bundled node runtime is still v22.23.2.
 	stainlessPackageVersion = "7.19.0"
 	stainlessRuntimeVersion = "v22.23.2"
 )
@@ -160,7 +162,7 @@ func registrationResponse() registration {
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "base-url", Type: pluginapi.ConfigFieldTypeString, Description: "u1s1 gateway base URL including /v1 (default https://api.u1s1app.com/v1)."},
 				{Name: "client", Type: pluginapi.ConfigFieldTypeString, Description: "Value of the x-u1s1-client header (default terminal)."},
-				{Name: "client-version", Type: pluginapi.ConfigFieldTypeString, Description: "Value of the x-u1s1-version header (default 1.13.2)."},
+				{Name: "client-version", Type: pluginapi.ConfigFieldTypeString, Description: "Value of the x-u1s1-version header (default 1.14.1)."},
 				{Name: "user-agent", Type: pluginapi.ConfigFieldTypeString, Description: "User-Agent sent upstream; the gateway checks the pi client fingerprint."},
 				{Name: "web-origin", Type: pluginapi.ConfigFieldTypeString, Description: "Website origin hosting the dashboard API (default https://u1s1app.com)."},
 				{Name: "checkin-enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Run the daily login check-in scheduler (default true)."},
