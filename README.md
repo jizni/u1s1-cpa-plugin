@@ -67,8 +67,13 @@ CGO_ENABLED=1 go build -buildmode=c-shared -trimpath -ldflags "-s -w" -o dist/u1
 默认取最近的 git tag（`git describe --tags --always --dirty`）。发版流程：
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0
+git tag v1.14.1 && git push origin v1.14.1
 ```
+
+**版本号与 u1s1-cli 发布版本对齐**（自 v1.14.1 起的约定）：tag `vX.Y.Z` 即表示这个
+插件发布跟进到 u1s1-cli X.Y.Z，`client-version` 默认值、指纹常量与之一一对应；之后每次
+跟进 CLI 发版就打同号 tag（如跟进 1.14.2 就打 `v1.14.2`）。迁移前插件曾用独立版本线
+（v0.2.x / v0.3.x），最后一个独立版本是 v0.3.14。
 
 GitHub Actions 的 [Release](.github/workflows/release.yml) 流水线会构建 `u1s1.so`、校验
 glibc 兼容性（≤ 2.36）、跑单测，然后把 `u1s1.so` 和 `u1s1.so.sha256` 挂到 Release 资产上。
