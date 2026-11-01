@@ -67,7 +67,7 @@ CGO_ENABLED=1 go build -buildmode=c-shared -trimpath -ldflags "-s -w" -o dist/u1
 默认取最近的 git tag（`git describe --tags --always --dirty`）。发版流程：
 
 ```bash
-git tag v1.14.1 && git push origin v1.14.1
+git tag v1.14.5 && git push origin v1.14.5
 ```
 
 **版本号与 u1s1-cli 发布版本对齐**（自 v1.14.1 起的约定）：tag `vX.Y.Z` 即表示这个
@@ -94,11 +94,11 @@ docker restart cli-proxy-api   # 老惯例：覆盖同名文件后必须重启�
 `config.yaml` 内容触发 watcher 即可——
 
 ```bash
-cp dist/u1s1.so <cpa>/plugins/linux/amd64/u1s1-v1.14.1.so
+cp dist/u1s1.so <cpa>/plugins/linux/amd64/u1s1-v1.14.5.so
 printf '\n# reload\n' >> <cpa>/config.yaml   # 必须改内容：touch 无效(sha256 跳过)、sed -i 无效(换 inode)
 ```
 
-在 `logs/main.log` 里看到 `pluginhost: plugin hot reloaded ... active_version=1.14.1` 即成功。
+在 `logs/main.log` 里看到 `pluginhost: plugin hot reloaded ... active_version=1.14.5` 即成功。
 注意：目录里存在 `u1s1-v*.so` 后，无版本号的 `u1s1.so` 将永远竞争不过它——后续更新请继续用
 带版本号的文件名（或先删旧的），否则会静默用旧版。详见 DEVELOPMENT.md §3。
 
@@ -118,7 +118,7 @@ plugins:
 | --- | --- | --- |
 | `base-url` | `https://api.u1s1app.com/v1` | 网关基础 URL（鉴权路由挂在 origin 根路径下）。 |
 | `client` | `terminal` | `x-u1s1-client` 的值。 |
-| `client-version` | `1.14.1` | `x-u1s1-version` 的值;需与真实 CLI 发布版本保持一致。 |
+| `client-version` | `1.14.5` | `x-u1s1-version` 的值;需与真实 CLI 发布版本保持一致。 |
 | `user-agent` | `pi (linux ...; x64)` | 必须保持 `pi (...)` 指纹。 |
 | `web-origin` | `https://u1s1app.com` | 网站 origin：`/api/me`、打卡领取接口所在（与网关 `api.u1s1app.com` 不同宿主，用会话 Cookie 鉴权）。 |
 | `checkin-enabled` | `true` | 是否运行每日打卡调度器。 |
